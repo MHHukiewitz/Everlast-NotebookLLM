@@ -1,5 +1,6 @@
 import inspect
 
+from app.schemas import plain_text
 from app.services import skills
 from app.services.chat_agent import (
     NO_ANSWER,
@@ -67,6 +68,11 @@ def test_leaked_tool_extract() -> None:
     cleaned, calls = extract_leaked_tools('Hallo {"name": "sources.list", "arguments": {}} Ende')
     assert "Hallo" in cleaned
     assert calls[0]["name"] == "sources.list"
+
+
+def test_plain_text_strips_control_chars() -> None:
+    assert "\x0b" not in plain_text("Hallo\x0bWelt\nOK")
+    assert "Hallo Welt\nOK" == plain_text("Hallo\x0bWelt\nOK")
 
 
 def test_research_skills_enqueue_only() -> None:

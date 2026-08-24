@@ -95,7 +95,7 @@ export const api = {
   researchJob: (notebookId: string, jobId: string) =>
     req<ResearchJob>(`/api/notebooks/${notebookId}/research/${jobId}`),
   importResearch: (notebookId: string, jobId: string, citationIds: string[], importReport: boolean) =>
-    req<Source[]>(`/api/notebooks/${notebookId}/research/${jobId}/import`, {
+    req<ResearchJob>(`/api/notebooks/${notebookId}/research/${jobId}/import`, {
       method: "POST",
       body: JSON.stringify({ citation_ids: citationIds, import_report: importReport }),
     }),

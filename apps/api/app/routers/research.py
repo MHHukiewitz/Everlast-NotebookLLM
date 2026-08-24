@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.deps import owned_notebook
 from app.models import Citation, Notebook, ResearchJob
-from app.schemas import ResearchImportIn, ResearchJobOut, ResearchStartIn, SourceOut
-from app.services.research import enqueue_research, import_research, run_research_job_isolated, searx_reachable
+from app.schemas import ResearchImportIn, ResearchJobOut, ResearchStartIn
+from app.services.research import enqueue_research, import_research_isolated, run_research_job_isolated, searx_reachable
 
 api = APIRouter(prefix="/api/notebooks/{notebook_id}")
 
@@ -45,14 +45,25 @@ async def get_research(
     return ResearchJobOut.model_validate(job).model_copy(update={"candidates": list(cites)})
 
 
-@api.post("/research/{job_id}/import", response_model=list[SourceOut])
+@api.post("/research/{job_id}/import", response_model=ResearchJobOut)
 async def import_job(
     job_id: uuid.UUID,
     body: ResearchImportIn,
+    background_tasks: BackgroundTasks,
     notebook: Notebook = Depends(owned_notebook),
     session: AsyncSession = Depends(get_session),
-) -> list:
+) -> ResearchJobOut:
     job = await session.get(ResearchJob, job_id)
     if job is None or job.notebook_id != notebook.id:
         raise HTTPException(404, "Recherche nicht gefunden")
-    return await import_research(session, job, body.citation_ids, body.import_report)
+    if job.status not in {"ready", "importing"}:
+        raise HTTPException(400, "Recherche ist nicht bereit zum Import.")
+    job.status = "importing"
+    job.progress = "Import läuft"
+    await session.commit()
+    await session.refresh(job)
+    background_tasks.add_task(import_research_isolated, job.id, list(body.citation_ids), body.import_report)
+    cites = (
+        await session.execute(select(Citation).where(Citation.research_job_id == job.id))
+    ).scalars()
+    return ResearchJobOut.model_validate(job).model_copy(update={"candidates": list(cites)})

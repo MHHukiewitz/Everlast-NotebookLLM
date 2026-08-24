@@ -236,11 +236,11 @@ export default function Page() {
 
   useEffect(() => {
     if (!notebook || !researchId) return;
-    if (researchStatus !== "queued" && researchStatus !== "running") return;
+    if (researchStatus !== "queued" && researchStatus !== "running" && researchStatus !== "importing") return;
     let ticks = 0;
     const timer = window.setInterval(() => {
       ticks += 1;
-      if (ticks > 45) {
+      if (ticks > 90) {
         setResearchError(t.searchTimeout);
         setResearchBusy(false);
         setPendingResearchId(null);
@@ -257,6 +257,14 @@ export default function Page() {
             setResearchBusy(false);
             return;
           }
+          if (next.status === "imported") {
+            setResearch(null);
+            setSelectedCites([]);
+            setResearchBusy(false);
+            void refresh(notebook.id);
+            void syncNotebook(notebook.id);
+            return;
+          }
           if (next.status === "error") {
             setResearchError(next.progress || t.searchTimeout);
             setResearchBusy(false);
@@ -271,7 +279,7 @@ export default function Page() {
         });
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [notebook, researchId, researchStatus]);
+  }, [notebook, researchId, researchStatus, refresh, syncNotebook]);
 
   async function onResearch() {
     if (!notebook || researchBusy) return;
@@ -320,13 +328,18 @@ export default function Page() {
   }
 
   async function onImport() {
-    if (!notebook || !research) return;
-    setBusy(true);
-    await api.importResearch(notebook.id, research.id, selectedCites, true);
-    setResearch(null);
-    await refresh(notebook.id);
-    await syncNotebook(notebook.id);
-    setBusy(false);
+    if (!notebook || !research || researchBusy) return;
+    setResearchError("");
+    setResearchBusy(true);
+    const job = await api.importResearch(notebook.id, research.id, selectedCites, true).catch((err: Error) => {
+      setResearchError(err.message === "Failed to fetch" ? t.apiOffline : err.message);
+      return null;
+    });
+    if (!job) {
+      setResearchBusy(false);
+      return;
+    }
+    setResearch(job);
   }
 
   const researchReadyId = research?.status === "ready" ? research.id : "";
@@ -622,7 +635,7 @@ export default function Page() {
                   {t.cancelResearch}
                 </button>
               </div>
-            ) : research && research.status === "ready" ? (
+            ) : research && (research.status === "ready" || research.status === "importing") ? (
               <div className="space-y-3 text-sm">
                 <button className="text-xs text-accent" onClick={onCancelResearch}>
                   ← {t.cancelResearch}
@@ -635,6 +648,7 @@ export default function Page() {
                       type="checkbox"
                       className="mt-1"
                       checked={selectedCites.includes(c.id)}
+                      disabled={researchBusy}
                       onChange={() =>
                         setSelectedCites((ids) => (ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id]))
                       }
@@ -655,6 +669,7 @@ export default function Page() {
                       type="checkbox"
                       className="mt-1"
                       checked={selectedCites.includes(c.id)}
+                      disabled={researchBusy}
                       onChange={() =>
                         setSelectedCites((ids) => (ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id]))
                       }
@@ -668,8 +683,8 @@ export default function Page() {
                     </span>
                   </label>
                 ))}
-                <button className="btn-primary" onClick={onImport}>
-                  {t.import}
+                <button className="btn-primary" disabled={researchBusy} onClick={onImport}>
+                  {researchBusy ? t.importing : t.import}
                 </button>
               </div>
             ) : activeSource ? (

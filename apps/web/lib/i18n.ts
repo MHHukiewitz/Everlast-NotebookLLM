@@ -96,6 +96,7 @@ export const t = {
   acceptOr: "Ich bestätige den Drittland-Transfer zu OpenRouter. Nur für die Demo.",
   save: "Speichern",
   import: "Importieren",
+  importing: "Import läuft…",
   cited: "Im Bericht zitiert",
   notCited: "Nicht zitiert",
   downloadPdf: "Als PDF laden",

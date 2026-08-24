@@ -20,6 +20,10 @@ from app.services.tracing import pack_prompt, record_generation, start_trace
 _SKIP = {".pdf", ".jpg", ".png", ".gif", ".zip", ".css", ".js"}
 
 
+def _plain(text: str) -> str:
+    return "".join(ch if ch in "\n\t" or ord(ch) >= 32 else " " for ch in text)
+
+
 def _host_open(url: str) -> bool:
     parsed = urlparse(url)
     host = parsed.hostname or "127.0.0.1"
@@ -53,8 +57,8 @@ def searx_search(query: str, count: int = 8) -> list[dict[str, str]]:
         out.append(
             {
                 "url": url,
-                "title": item.get("title") or url,
-                "quote": item.get("content") or "",
+                "title": _plain(item.get("title") or url),
+                "quote": _plain(item.get("content") or ""),
             }
         )
     return out
@@ -117,8 +121,8 @@ async def _add_candidates(
                 tenant_id=job.tenant_id,
                 research_job_id=job.id,
                 url=item["url"],
-                title=item.get("title") or item["url"],
-                quote=item.get("quote") or item.get("text", "")[:280],
+                title=_plain(item.get("title") or item["url"]),
+                quote=_plain((item.get("quote") or item.get("text", ""))[:280]),
                 cited_in_report=item["url"] in cited,
             )
         )
@@ -134,10 +138,11 @@ async def run_fast_research(session: AsyncSession, job: ResearchJob) -> None:
     job.progress = "Suche läuft"
     await session.commit()
     results = searx_search(job.query)
-    job.report_md = "# Schnelle Recherche\n\n" + "\n".join(
-        f"- [{item['title']}]({item['url']}) — {item['quote']}" for item in results
+    job.report_md = _plain(
+        "# Schnelle Recherche\n\n"
+        + "\n".join(f"- [{item['title']}]({item['url']}) — {item['quote']}" for item in results)
     )
-    await _add_candidates(session, job, results, set())
+    await _add_candidates(session, job, results, {item["url"] for item in results})
     job.status = "ready"
     job.progress = f"{len(results)} Treffer"
     await session.commit()
@@ -242,6 +247,16 @@ async def run_research_job_isolated(job_id: uuid.UUID) -> None:
         await run_research_job(session, job_id)
 
 
+async def import_research_isolated(
+    job_id: uuid.UUID, citation_ids: list[uuid.UUID], import_report: bool
+) -> None:
+    async with SessionLocal() as session:
+        job = await session.get(ResearchJob, job_id)
+        if job is None:
+            return
+        await import_research(session, job, citation_ids, import_report)
+
+
 async def import_research(
     session: AsyncSession,
     job: ResearchJob,
@@ -249,6 +264,20 @@ async def import_research(
     import_report: bool,
 ) -> list[Source]:
     created: list[Source] = []
+    chosen: list[Citation] = []
+    if citation_ids:
+        chosen = list(
+            (
+                await session.execute(
+                    select(Citation).where(Citation.id.in_(citation_ids), Citation.research_job_id == job.id)
+                )
+            ).scalars()
+        )
+    total = len(chosen) + (1 if import_report and job.report_md else 0)
+    done = 0
+    job.status = "importing"
+    job.progress = "Import läuft"
+    await session.commit()
     if import_report and job.report_md:
         report_cites = list(
             (
@@ -286,11 +315,9 @@ async def import_research(
         ]
         await finalize_source(session, source, job.report_md, copies)
         created.append(source)
-    chosen = (
-        await session.execute(
-            select(Citation).where(Citation.id.in_(citation_ids), Citation.research_job_id == job.id)
-        )
-    ).scalars()
+        done += 1
+        job.progress = f"Import {done}/{total}"
+        await session.commit()
     for cite in chosen:
         source = Source(
             tenant_id=job.tenant_id,
@@ -324,6 +351,9 @@ async def import_research(
             ],
         )
         created.append(source)
+        done += 1
+        job.progress = f"Import {done}/{total}"
+        await session.commit()
     job.status = "imported"
     notebook = await session.get(Notebook, job.notebook_id)
     if notebook is not None:
