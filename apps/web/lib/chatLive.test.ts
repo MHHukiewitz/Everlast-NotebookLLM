@@ -91,6 +91,9 @@ assert.deepEqual(
 assert.deepEqual(usedCitations("Keine Zitate.", [{ n: 1, quote: "a" }]), []);
 assert.equal(displayChatText("[1] [2]\n\nHallo {"), "Hallo");
 assert.deepEqual(citationMarks("Foundation [2][4] und [5][2]."), [2, 4, 5, 2]);
+assert.deepEqual(citationMarks("Die Firma sitzt in Berlin [7, 5]."), [7, 5]);
+assert.deepEqual(citationMarks("Siehe [7,5, 3] und [2]."), [7, 5, 3, 2]);
+assert.equal(protectCiteMarks("Siehe [7, 5] und [2]."), "Siehe ⟦7⟧⟦5⟧ und ⟦2⟧.");
 assert.deepEqual(
   usedCitations("Foundation [2][4].", [
     { n: "2" as unknown as number, quote: "a" },

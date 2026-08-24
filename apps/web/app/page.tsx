@@ -77,8 +77,12 @@ export default function Page() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [modalities, setModalities] = useState<Modalities | null>(null);
   const [studioSkill, setStudioSkill] = useState<Skill | null>(null);
-  const [pendingStudio, setPendingStudio] = useState<{ skillId: string; title: string; type: string } | null>(null);
+  const [pendingStudio, setPendingStudio] = useState<
+    { id: string; skillId: string; title: string; type: string }[]
+  >([]);
   const studioListRef = useRef<HTMLDivElement>(null);
+  const studioSubmitLock = useRef(false);
+  const studioPendingSeq = useRef(0);
   const chatListRef = useRef<HTMLDivElement>(null);
   const pinChatToBottom = useRef(true);
   const chatSettingsSeq = useRef(0);
@@ -99,7 +103,6 @@ export default function Page() {
   const [liveCitations, setLiveCitations] = useState<MessageCitation[]>([]);
   const [pendingResearchId, setPendingResearchId] = useState<string | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
-  const [studioBusy, setStudioBusy] = useState(false);
   const liveSeq = useRef(0);
   const resumeOnce = useRef("");
   const nextLiveId = useCallback(() => {
@@ -133,8 +136,8 @@ export default function Page() {
     [artifacts],
   );
   const locks = useMemo(
-    () => panelLocks({ chatBusy, studioBusy, addBusy, researchBusy }),
-    [chatBusy, studioBusy, addBusy, researchBusy],
+    () => panelLocks({ chatBusy, addBusy, researchBusy }),
+    [chatBusy, addBusy, researchBusy],
   );
 
   const refresh = useCallback(async (id: string) => {
@@ -292,7 +295,11 @@ export default function Page() {
         if (researchStatus === "importing") {
           setResearchError(t.importTimeout);
           setResearchBusy(false);
-        } else if (researchStatus === "queued" || researchStatus === "running") {
+        } else if (
+          researchStatus === "queued" ||
+          researchStatus === "running" ||
+          researchStatus === "ready"
+        ) {
           setResearchError(t.searchTimeout);
           setResearchBusy(false);
           setPendingResearchId(null);
@@ -399,7 +406,7 @@ export default function Page() {
     setResearch(job);
   }
 
-  const researchReadyId = research?.status === "ready" ? research.id : "";
+  const researchReadyId = research?.status === "ready" && researchReportMd.trim() ? research.id : "";
 
   useEffect(() => {
     if (!notebook || !pendingResearchId || !researchReadyId) return;
@@ -419,6 +426,10 @@ export default function Page() {
       await syncNotebook(notebook.id);
       setLiveParts([]);
       setLiveCitations([]);
+      setPendingResearchId(null);
+      setChatBusy(false);
+    }).catch((err: Error) => {
+      setError(err.message === "Failed to fetch" ? t.apiOffline : err.message);
       setPendingResearchId(null);
       setChatBusy(false);
     });
@@ -605,7 +616,6 @@ export default function Page() {
   }
 
   async function onRunSkill(skill: Skill) {
-    if (studioBusy) return;
     if (skill.id === "notes.create") {
       setNoteOpen(true);
       return;
@@ -626,12 +636,14 @@ export default function Page() {
   }
 
   async function onCreateStudio() {
-    if (!notebook || !studioSkill || studioBusy) return;
+    if (!notebook || !studioSkill || studioSubmitLock.current) return;
     if (studioSourceIds.length === 0) {
       setStudioError(t.studioNoSources);
       return;
     }
+    studioSubmitLock.current = true;
     const skill = studioSkill;
+    const notebookId = notebook.id;
     const args = {
       prompt: studioPrompt,
       source_ids: studioSourceIds,
@@ -639,25 +651,30 @@ export default function Page() {
       language: mediaLanguage,
       style: mediaStyle,
     };
+    const pendingId = `pending-studio-${studioPendingSeq.current + 1}`;
+    studioPendingSeq.current += 1;
     setStudioSkill(null);
     setStudioError("");
-    setStudioBusy(true);
-    setPendingStudio({
-      skillId: skill.id,
-      title: skill.title,
-      type: skill.id.startsWith("studio.") ? skill.id.slice(7) : skill.id,
-    });
+    setPendingStudio((list) => [
+      {
+        id: pendingId,
+        skillId: skill.id,
+        title: skill.title,
+        type: skill.id.startsWith("studio.") ? skill.id.slice(7) : skill.id,
+      },
+      ...list,
+    ]);
+    studioSubmitLock.current = false;
     studioListRef.current?.scrollTo({ top: 0 });
-    const result = await api.runSkill(notebook.id, skill.id, args).catch((err: Error) => {
+    const result = await api.runSkill(notebookId, skill.id, args).catch((err: Error) => {
       setStudioError(err.message);
       return null;
     });
     if (result) {
-      await refresh(notebook.id);
-      await syncNotebook(notebook.id);
+      await refresh(notebookId);
+      await syncNotebook(notebookId);
     }
-    setPendingStudio(null);
-    setStudioBusy(false);
+    setPendingStudio((list) => list.filter((item) => item.id !== pendingId));
   }
 
   if (!notebook) {
@@ -1172,36 +1189,37 @@ export default function Page() {
                 <StudioSkillButton
                   key={skill.id}
                   skill={skill}
-                  busy={locks.studioSkillsDisabled}
+                  busy={false}
                   active={
-                    pendingStudio?.skillId === skill.id ||
-                    (!pendingStudio && artifacts[0]?.skill_id === skill.id)
+                    pendingStudio.some((item) => item.skillId === skill.id) ||
+                    (pendingStudio.length === 0 && artifacts[0]?.skill_id === skill.id)
                   }
                   onRun={onRunSkill}
                 />
               ))}
             </div>
             {studioError && <p className="mb-3 text-xs text-red-600">{studioError}</p>}
-            {artifacts.length === 0 && !pendingStudio ? (
+            {artifacts.length === 0 && pendingStudio.length === 0 ? (
               <p className="text-neutral-500">
                 {t.studioEmpty} {t.studioHint}
               </p>
             ) : (
               <ul className="space-y-2">
-                {pendingStudio && (
+                {pendingStudio.map((item) => (
                   <ArtifactCard
+                    key={item.id}
                     artifact={{
-                      id: "pending-studio",
-                      skill_id: pendingStudio.skillId,
-                      type: pendingStudio.type,
-                      title: pendingStudio.title,
+                      id: item.id,
+                      skill_id: item.skillId,
+                      type: item.type,
+                      title: item.title,
                       payload: { status: "pending" },
                       created_at: "",
                     }}
                     notebookId={notebook.id}
                     loading
                   />
-                )}
+                ))}
                 {artifacts.map((artifact) => (
                   <ArtifactCard
                     key={artifact.id}
@@ -1285,9 +1303,9 @@ export default function Page() {
           format={mediaFormat}
           language={mediaLanguage}
           style={mediaStyle}
-          busy={locks.studioModalLocked}
+          busy={false}
           error={studioError}
-          onClose={() => !locks.studioModalLocked && setStudioSkill(null)}
+          onClose={() => setStudioSkill(null)}
           onSourceIds={setStudioSourceIds}
           onPrompt={setStudioPrompt}
           onFormat={setMediaFormat}

@@ -9,8 +9,23 @@ export function normalizeMarkdown(text: string): string {
   return out.trim();
 }
 
+const GROUPED_CITE = /\[(\d+(?:\s*,\s*\d+)+)\]/g;
+const GROUPED_PROTECTED = /⟦(\d+(?:\s*,\s*\d+)+)⟧/g;
+
+export function expandGroupedCiteMarks(text: string): string {
+  const expand = (nums: string, wrap: (n: string) => string) =>
+    nums
+      .split(/\s*,\s*/)
+      .filter(Boolean)
+      .map(wrap)
+      .join("");
+  return (text || "")
+    .replace(GROUPED_CITE, (_all, nums: string) => expand(nums, (n) => `[${n}]`))
+    .replace(GROUPED_PROTECTED, (_all, nums: string) => expand(nums, (n) => `⟦${n}⟧`));
+}
+
 export function protectCiteMarks(text: string): string {
-  return (text || "").replace(/\[(\d+)\]/g, "⟦$1⟧");
+  return expandGroupedCiteMarks(text || "").replace(/\[(\d+)\]/g, "⟦$1⟧");
 }
 
 function unwrapOuterFence(text: string): string {

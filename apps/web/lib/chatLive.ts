@@ -1,3 +1,5 @@
+import { expandGroupedCiteMarks } from "./markdown";
+
 export type ToolCallView = {
   call_id: string;
   skill_id: string;
@@ -250,7 +252,9 @@ export function visibleChatText(text: string): string {
 }
 
 export function citationMarks(text: string): number[] {
-  return [...(text || "").matchAll(/\[(\d+)\]|⟦(\d+)⟧/g)].map((match) => Number(match[1] || match[2]));
+  return [...expandGroupedCiteMarks(text || "").matchAll(/\[(\d+)\]|⟦(\d+)⟧/g)].map((match) =>
+    Number(match[1] || match[2]),
+  );
 }
 
 export function stripCitationDump(text: string): string {

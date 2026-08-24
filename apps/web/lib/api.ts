@@ -26,6 +26,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const response = await fetch(`${BASE}${path}`, {
     ...init,
+    cache: "no-store",
     credentials: "include",
     headers,
   });

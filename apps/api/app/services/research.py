@@ -234,21 +234,11 @@ async def write_research_report(session: AsyncSession, job: ResearchJob) -> None
     await session.commit()
 
 
-async def write_research_report_isolated(job_id: uuid.UUID) -> None:
-    async with SessionLocal() as session:
-        job = await session.get(ResearchJob, job_id)
-        if job is None:
-            return
-        await write_research_report(session, job)
-
-
-def queue_research_report(job_id: uuid.UUID) -> None:
-    asyncio.create_task(write_research_report_isolated(job_id))
-
-
-def queue_source_followup(source_id: uuid.UUID) -> None:
-    asyncio.create_task(embed_source_isolated(source_id))
-    asyncio.create_task(refresh_model_summary(source_id))
+async def prepare_imported_sources(source_ids: list[uuid.UUID]) -> None:
+    if not source_ids:
+        return
+    await asyncio.gather(*[embed_source_isolated(source_id) for source_id in source_ids])
+    await asyncio.gather(*[refresh_model_summary(source_id) for source_id in source_ids])
 
 
 async def run_fast_research(session: AsyncSession, job: ResearchJob) -> None:
@@ -267,7 +257,7 @@ async def run_fast_research(session: AsyncSession, job: ResearchJob) -> None:
     if results:
         job.report_md = ""
         await session.commit()
-        queue_research_report(job.id)
+        await write_research_report(session, job)
         return
     job.report_md = fallback_report("fast", results)
     await session.commit()
@@ -294,7 +284,7 @@ async def run_deep_research(session: AsyncSession, job: ResearchJob) -> None:
     if items:
         job.report_md = ""
         await session.commit()
-        queue_research_report(job.id)
+        await write_research_report(session, job)
         return
     job.report_md = fallback_report("deep", items)
     await session.commit()
@@ -469,11 +459,13 @@ async def import_research(
         done += 1
         job.progress = f"Import {done}/{total}"
         await session.commit()
+    if followup_ids:
+        job.progress = "Quellen werden vorbereitet"
+        await session.commit()
+        await prepare_imported_sources(followup_ids)
     job.status = "imported"
     notebook = await session.get(Notebook, job.notebook_id)
     if notebook is not None:
         maybe_autoname(notebook, job.query)
     await session.commit()
-    for source_id in followup_ids:
-        queue_source_followup(source_id)
     return created

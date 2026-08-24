@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import uuid
 from types import SimpleNamespace
 
@@ -95,7 +96,6 @@ def test_fast_research_ready_before_report(monkeypatch) -> None:
         report_md="old",
     )
     session = _FakeSession([], None)
-    queued: list[uuid.UUID] = []
     monkeypatch.setattr(research, "searx_reachable", lambda: True)
     monkeypatch.setattr(
         research,
@@ -104,9 +104,39 @@ def test_fast_research_ready_before_report(monkeypatch) -> None:
             {"url": "https://x.example", "title": "Everlast", "quote": "Beratung"},
         ],
     )
-    monkeypatch.setattr(research, "queue_research_report", queued.append)
+    wrote: list[uuid.UUID] = []
+
+    async def fake_write(_session, job_arg) -> None:
+        wrote.append(job_arg.id)
+        assert job_arg.status == "ready"
+        assert job_arg.report_md == ""
+        job_arg.report_md = "Zusammenfassung"
+
+    monkeypatch.setattr(research, "write_research_report", fake_write)
     asyncio.run(research.run_fast_research(session, job))
     assert job.status == "ready"
-    assert job.report_md == ""
-    assert queued == [job.id]
+    assert wrote == [job.id]
+    assert job.report_md == "Zusammenfassung"
     assert any(isinstance(row, Citation) for row in session.added)
+
+
+def test_prepare_imported_sources_waits(monkeypatch) -> None:
+    seen: list[tuple[str, uuid.UUID]] = []
+
+    async def fake_embed(source_id: uuid.UUID) -> None:
+        seen.append(("embed", source_id))
+
+    async def fake_summary(source_id: uuid.UUID) -> None:
+        seen.append(("summary", source_id))
+
+    monkeypatch.setattr(research, "embed_source_isolated", fake_embed)
+    monkeypatch.setattr(research, "refresh_model_summary", fake_summary)
+    source_id = uuid.uuid4()
+    asyncio.run(research.prepare_imported_sources([source_id]))
+    assert seen == [("embed", source_id), ("summary", source_id)]
+
+
+def test_import_waits_for_source_prep() -> None:
+    src = inspect.getsource(research.import_research)
+    assert src.index("await prepare_imported_sources") < src.index('job.status = "imported"')
+    assert "create_task" not in inspect.getsource(research)

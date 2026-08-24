@@ -46,6 +46,18 @@ assert.deepEqual(
   [1, 2],
 );
 
+const grouped = {
+  body_md: "Berlin und Hamburg [7, 5].",
+  citations: [
+    { n: 5, source_id: "s1", quote: "Hamburg", source_title: "Quelle A" },
+    { n: 7, source_id: "s2", quote: "Berlin", source_title: "Quelle B" },
+  ],
+};
+assert.deepEqual(
+  bindArtifactCitations(grouped, "report", [...sources]).map((item) => item.n),
+  [7, 5],
+);
+
 const slideText = "Folie A [2]\nPunkt ohne Zahl";
 assert.deepEqual(
   bindTextCitations(slideText, normalizeArtifactCitations(map)).map((item) => item.n),

@@ -12,6 +12,9 @@ from app.services.chat_agent import (
     TOOL_SKIPPED,
     _stream_pass,
     citation_marks,
+    expand_grouped_cite_marks,
+    finalize_answer,
+    context_from_chunks,
     extract_leaked_tools,
     is_smalltalk,
     json_object_complete,
@@ -20,6 +23,7 @@ from app.services.chat_agent import (
     research_scratch,
     retrieve_step_detail,
     run_chat,
+    run_chat_resume,
     split_incomplete_tool,
     step_event,
     strip_citation_dump,
@@ -80,6 +84,30 @@ def test_research_scratch_lists_candidates() -> None:
     assert "https://x.example" in text
     assert cites[0]["url"] == "https://x.example"
     assert cites[0]["n"] == 1
+
+
+def test_context_from_chunks_numbers_sources() -> None:
+    blocks, cites = context_from_chunks(
+        [
+            {"source_title": "A", "text": "alpha", "source_id": "1", "chunk_id": "c1"},
+            {"source_title": "B", "text": "beta", "source_id": "2", "chunk_id": "c2"},
+        ]
+    )
+    assert blocks[0] == "[1] A: alpha"
+    assert cites[1]["n"] == 2
+    assert cites[1]["source_id"] == "2"
+
+
+def test_chat_refreshes_after_source_change() -> None:
+    src = inspect.getsource(run_chat)
+    assert src.count("hybrid_search") >= 2
+    assert "context_from_chunks" in src
+
+
+def test_resume_requires_report() -> None:
+    src = inspect.getsource(run_chat_resume)
+    assert "report_md" in src
+    assert "noch nicht fertig" in src
 
 
 def test_leaked_tool_extract() -> None:
@@ -184,6 +212,13 @@ def test_citation_dump_and_used_filter() -> None:
     cites = [{"n": index, "quote": str(index)} for index in range(1, 9)]
     assert [item["n"] for item in used_citations(cleaned, cites)] == [1]
     assert used_citations("Keine Zitate.", cites) == []
+    assert expand_grouped_cite_marks("Berlin [7, 5] und [2].") == "Berlin [7][5] und [2]."
+    assert citation_marks("Berlin [7, 5] und [2].") == {7, 5, 2}
+    grouped = used_citations("Berlin [7, 5].", cites)
+    assert [item["n"] for item in grouped] == [5, 7]
+    text, used = finalize_answer("Berlin [7, 5].", cites)
+    assert text == "Berlin [7][5]."
+    assert [item["n"] for item in used] == [5, 7]
 
 
 def test_plain_text_strips_control_chars() -> None:

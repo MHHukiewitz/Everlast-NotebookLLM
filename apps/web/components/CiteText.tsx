@@ -3,6 +3,7 @@
 import { cloneElement, Fragment, isValidElement, type ReactNode } from "react";
 import { CitationChips } from "@/components/CitationChips";
 import { usedCitations } from "@/lib/chatLive";
+import { expandGroupedCiteMarks } from "@/lib/markdown";
 import { uniqueSourceCitations } from "@/lib/studioCitations";
 import type { MessageCitation } from "@/lib/types";
 
@@ -11,8 +12,9 @@ export function replaceCiteMarks(
   citations: MessageCitation[],
   onCite: (cite: MessageCitation) => void,
 ): ReactNode {
-  const parts = text.split(/(⟦\d+⟧|\[\d+\])/g);
-  if (parts.length === 1) return text;
+  const expanded = expandGroupedCiteMarks(text);
+  const parts = expanded.split(/(⟦\d+⟧|\[\d+\])/g);
+  if (parts.length === 1) return expanded;
   return parts.map((part, index) => {
     const match = part.match(/^(?:⟦(\d+)⟧|\[(\d+)\])$/);
     if (!match) return part;
@@ -50,7 +52,7 @@ export function injectCites(
     if (node.type === "a") {
       const raw = node.props.children;
       const label = typeof raw === "string" || typeof raw === "number" ? String(raw) : "";
-      const mark = label.match(/^\[?(\d+)\]?$/);
+      const mark = label.match(/^\[?(\d+(?:\s*,\s*\d+)*)\]?$/);
       if (mark) return replaceCiteMarks(`[${mark[1]}]`, citations, onCite);
       return node;
     }

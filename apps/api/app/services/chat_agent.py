@@ -64,6 +64,7 @@ _FENCE_OPEN = re.compile(r"```(?:json)?[ \t]*\n", re.I)
 _JSON_FENCE_OPEN = re.compile(r"```json[ \t]*\n", re.I)
 _BARE_FENCE_OPEN = re.compile(r"```[ \t]*\n")
 _CITE_MARK = re.compile(r"\[(\d+)\]")
+_GROUPED_CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)+)\]")
 _DUMP_LINE = re.compile(r"^\s*(?:\[\d+\]\s*)+$")
 _TOOL_KEY_PREFIX = re.compile(r'\{\s*"([A-Za-z_]*)"?\s*:?')
 _DELETE_TARGET = re.compile(
@@ -123,6 +124,23 @@ def retrieve_step_detail(chunks: list[dict[str, Any]]) -> str:
     sources = {str(chunk.get("source_id") or "") for chunk in chunks}
     sources.discard("")
     return f"{len(chunks)} Treffer in {len(sources)} Quellen"
+
+
+def context_from_chunks(chunks: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+    context_blocks = []
+    citation_map = []
+    for index, chunk in enumerate(chunks, start=1):
+        context_blocks.append(f"[{index}] {chunk['source_title']}: {chunk['text']}")
+        citation_map.append(
+            {
+                "n": index,
+                "source_id": chunk["source_id"],
+                "chunk_id": chunk["chunk_id"],
+                "quote": chunk["text"][:280],
+                "title": chunk["source_title"],
+            }
+        )
+    return context_blocks, citation_map
 
 
 def tool_args_detail(args: dict[str, Any]) -> str:
@@ -446,12 +464,19 @@ def split_incomplete_tool(text: str) -> tuple[str, str]:
     return text[:hold_at], text[hold_at:]
 
 
+def expand_grouped_cite_marks(text: str) -> str:
+    def _expand(match: re.Match[str]) -> str:
+        return "".join(f"[{part.strip()}]" for part in match.group(1).split(",") if part.strip())
+
+    return _GROUPED_CITE.sub(_expand, text or "")
+
+
 def citation_marks(text: str) -> set[int]:
-    return {int(found.group(1)) for found in _CITE_MARK.finditer(text or "")}
+    return {int(found.group(1)) for found in _CITE_MARK.finditer(expand_grouped_cite_marks(text))}
 
 
 def strip_citation_dump(text: str) -> str:
-    kept = [line for line in (text or "").splitlines() if not _DUMP_LINE.match(line)]
+    kept = [line for line in expand_grouped_cite_marks(text or "").splitlines() if not _DUMP_LINE.match(line)]
     return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
 
 
@@ -782,19 +807,7 @@ async def run_chat(
     retrieve = step_event("retrieve", "Quellen durchsuchen", retrieve_step_detail(chunks))
     record_step(reasoning, retrieve)
     yield retrieve
-    context_blocks = []
-    citation_map = []
-    for index, chunk in enumerate(chunks, start=1):
-        context_blocks.append(f"[{index}] {chunk['source_title']}: {chunk['text']}")
-        citation_map.append(
-            {
-                "n": index,
-                "source_id": chunk["source_id"],
-                "chunk_id": chunk["chunk_id"],
-                "quote": chunk["text"][:280],
-                "title": chunk["source_title"],
-            }
-        )
+    context_blocks, citation_map = context_from_chunks(chunks)
     system = SYSTEM
     if context_blocks:
         system = join_system(SYSTEM, "Quellenkontext:\n" + "\n\n".join(context_blocks))
@@ -872,6 +885,18 @@ async def run_chat(
             break
         if not ran_tool:
             break
+        if mutated_sources:
+            source_ids = await selected_source_ids(session, notebook.id)
+            chunks = await hybrid_search(session, notebook.id, notebook.tenant_id, user_text, source_ids)
+            context_blocks, citation_map = context_from_chunks(chunks)
+            system = SYSTEM
+            if context_blocks:
+                system = join_system(SYSTEM, "Quellenkontext:\n" + "\n\n".join(context_blocks))
+            messages[0] = {"role": "system", "content": system}
+            retrieve = step_event("retrieve", "Quellen durchsuchen", retrieve_step_detail(chunks))
+            record_step(reasoning, retrieve)
+            yield retrieve
+            mutated_sources = False
         tools = _tools_for_prompt() if tools_enabled else None
 
     assistant_text, _leaks = extract_leaked_tools(assistant_text)
@@ -1287,7 +1312,7 @@ async def run_chat_resume(
     job = await session.get(ResearchJob, job_id)
     if job is None or job.notebook_id != notebook.id:
         raise ValueError("Recherche nicht gefunden")
-    if job.status != "ready":
+    if job.status != "ready" or not (job.report_md or "").strip():
         raise ValueError("Recherche ist noch nicht fertig.")
     cites = list(
         (await session.execute(select(Citation).where(Citation.research_job_id == job.id).order_by(Citation.id))).scalars()

@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,9 +33,11 @@ async def start_research(
 @api.get("/research/{job_id}", response_model=ResearchJobOut)
 async def get_research(
     job_id: uuid.UUID,
+    response: Response,
     notebook: Notebook = Depends(owned_notebook),
     session: AsyncSession = Depends(get_session),
 ) -> ResearchJobOut:
+    response.headers["Cache-Control"] = "no-store"
     job = await session.get(ResearchJob, job_id)
     if job is None or job.notebook_id != notebook.id:
         raise HTTPException(404, "Recherche nicht gefunden")
