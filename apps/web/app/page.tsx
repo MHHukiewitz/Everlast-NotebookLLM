@@ -1,49 +1,77 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import { SiteFooter } from "@/components/SiteFooter";
+import { ResizableStages } from "@/components/layout/ResizableStages";
+import { NotebookBrowser } from "@/components/notebooks/NotebookBrowser";
 import { ArtifactCard } from "@/components/studio/ArtifactCard";
-import { ApiError, api, streamChat, uploadFile } from "@/lib/api";
+import { StudioRunModal } from "@/components/studio/StudioRunModal";
+import { StudioSkillButton } from "@/components/studio/StudioSkillButton";
+import { ApiError, api, streamChat, streamChatResume, uploadFile } from "@/lib/api";
+import { applyChatEvent, toolCallsFromMessage, type LivePart } from "@/lib/chatLive";
 import { t } from "@/lib/i18n";
+import { ACTIVE_NOTEBOOK_KEY, SOURCE_SORT_KEY } from "@/lib/notebook";
 import { displayUrl, isHttpUrl, sourceFavicon } from "@/lib/source";
-import type { Artifact, AuthUser, Message, Notebook, Provider, ResearchJob, Skill, Source, SourceDetail } from "@/lib/types";
+import { DEFAULT_SOURCE_SORT, formatSourceSort, parseSourceSort, sortSources, type SourceSort } from "@/lib/sourceSort";
+import type { Artifact, AuthUser, Message, Modalities, Notebook, Provider, ResearchJob, Skill, Source, SourceDetail } from "@/lib/types";
 
 function SourceIcon({ origin, favicon }: { origin: string | null | undefined; favicon?: string | null }) {
   const [broken, setBroken] = useState(false);
   const src = broken ? "" : sourceFavicon(origin, favicon);
   if (!src) {
-    return <span className="mt-0.5 h-4 w-4 shrink-0 rounded bg-mist" aria-hidden />;
+    return <span className="mt-0.5 h-8 w-8 shrink-0 rounded-lg bg-mist" aria-hidden />;
   }
   return (
-    <img
-      src={src}
-      alt=""
-      width={16}
-      height={16}
-      className="mt-0.5 h-4 w-4 shrink-0 rounded-sm"
-      onError={() => setBroken(true)}
-    />
+    <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-mist">
+      <img
+        src={src}
+        alt=""
+        width={24}
+        height={24}
+        className="h-6 w-6"
+        onError={() => setBroken(true)}
+      />
+    </span>
   );
 }
 
 export default function Page() {
   const [notebook, setNotebook] = useState<Notebook | null>(null);
+  const [notebooks, setNotebooks] = useState<Notebook[]>([]);
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [sourceSort, setSourceSort] = useState<SourceSort>(DEFAULT_SOURCE_SORT);
   const [sources, setSources] = useState<Source[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [studioError, setStudioError] = useState("");
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [modalities, setModalities] = useState<Modalities | null>(null);
+  const [studioSkill, setStudioSkill] = useState<Skill | null>(null);
+  const [pendingStudio, setPendingStudio] = useState<{ skillId: string; title: string; type: string } | null>(null);
+  const studioListRef = useRef<HTMLDivElement>(null);
+  const [studioSourceIds, setStudioSourceIds] = useState<string[]>([]);
+  const [studioPrompt, setStudioPrompt] = useState("");
+  const [mediaFormat, setMediaFormat] = useState<"briefing" | "explainer">("briefing");
+  const [mediaLanguage, setMediaLanguage] = useState("de");
+  const [mediaStyle, setMediaStyle] = useState("auto");
   const [activeSource, setActiveSource] = useState<SourceDetail | null>(null);
   const [research, setResearch] = useState<ResearchJob | null>(null);
   const [selectedCites, setSelectedCites] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<"fast" | "deep">("fast");
   const [chatInput, setChatInput] = useState("");
-  const [draft, setDraft] = useState("");
-  const [thoughts, setThoughts] = useState<string[]>([]);
+  const [liveParts, setLiveParts] = useState<LivePart[]>([]);
+  const [pendingResearchId, setPendingResearchId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const liveSeq = useRef(0);
+  const resumeOnce = useRef("");
+  const nextLiveId = useCallback(() => {
+    liveSeq.current += 1;
+    return `live_${liveSeq.current}`;
+  }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
@@ -61,12 +89,26 @@ export default function Page() {
   const [user, setUser] = useState<AuthUser | null>(null);
 
   const selectedCount = useMemo(() => sources.filter((s) => s.selected && s.status === "ready").length, [sources]);
+  const sortedSources = useMemo(() => sortSources(sources, sourceSort), [sources, sourceSort]);
+  const pendingMedia = useMemo(
+    () => artifacts.some((artifact) => artifact.payload?.status === "pending"),
+    [artifacts],
+  );
 
   const refresh = useCallback(async (id: string) => {
     const [src, msg, art] = await Promise.all([api.sources(id), api.messages(id), api.artifacts(id)]);
     setSources(src);
     setMessages(msg);
     setArtifacts(art);
+  }, []);
+
+  const syncNotebook = useCallback(async (id: string) => {
+    const next = await api.notebook(id);
+    setNotebook(next);
+    setNotebooks((list) => {
+      const others = list.filter((item) => item.id !== next.id);
+      return [next, ...others];
+    });
   }, []);
 
   useEffect(() => {
@@ -76,13 +118,21 @@ export default function Page() {
       .then(async (me) => {
         if (cancelled) return;
         setUser(me);
-        const [nbs, sk, pv] = await Promise.all([api.notebooks(), api.skills(), api.providers()]);
+        const [nbs, sk, pv, md] = await Promise.all([api.notebooks(), api.skills(), api.providers(), api.modalities()]);
         if (cancelled) return;
         setSkills(sk);
         setProviders(pv);
-        const nb = nbs[0] || (await api.createNotebook());
+        setModalities(md);
+        setNotebooks(nbs);
+        setSourceSort(parseSourceSort(window.localStorage.getItem(SOURCE_SORT_KEY)));
+        const savedId = window.localStorage.getItem(ACTIVE_NOTEBOOK_KEY);
+        const nb = nbs.find((item) => item.id === savedId) || nbs[0] || (await api.createNotebook());
         if (cancelled) return;
+        if (!nbs.some((item) => item.id === nb.id)) {
+          setNotebooks((list) => [nb, ...list]);
+        }
         setNotebook(nb);
+        window.localStorage.setItem(ACTIVE_NOTEBOOK_KEY, nb.id);
         setEuOk(nb.eu_notice_accepted);
         setOrOk(nb.openrouter_notice_accepted);
         await refresh(nb.id);
@@ -99,6 +149,39 @@ export default function Page() {
       cancelled = true;
     };
   }, [refresh]);
+
+  async function openNotebook(next: Notebook) {
+    setNotebook(next);
+    window.localStorage.setItem(ACTIVE_NOTEBOOK_KEY, next.id);
+    setEuOk(next.eu_notice_accepted);
+    setOrOk(next.openrouter_notice_accepted);
+    setActiveSource(null);
+    setResearch(null);
+    setSelectedCites([]);
+    setBrowseOpen(false);
+    setStudioError("");
+    await refresh(next.id);
+  }
+
+  async function onCreateNotebook() {
+    const created = await api.createNotebook();
+    setNotebooks((list) => [created, ...list]);
+    await openNotebook(created);
+  }
+
+  async function onBrowse() {
+    const list = await api.notebooks();
+    setNotebooks(list);
+    setBrowseOpen(true);
+  }
+
+  useEffect(() => {
+    if (!notebook || !pendingMedia) return;
+    const timer = window.setInterval(() => {
+      refresh(notebook.id);
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [notebook, pendingMedia, refresh]);
 
   async function onAddUrl() {
     if (!notebook) return;
@@ -118,6 +201,7 @@ export default function Page() {
     setUrlValue("");
     setAddOpen(false);
     await refresh(notebook.id);
+    await syncNotebook(notebook.id);
   }
 
   async function onAddText() {
@@ -133,6 +217,7 @@ export default function Page() {
     setTextBody("");
     setAddOpen(false);
     await refresh(notebook.id);
+    await syncNotebook(notebook.id);
   }
 
   async function onFiles(files: FileList | null) {
@@ -142,6 +227,7 @@ export default function Page() {
       await uploadFile(notebook.id, file);
     }
     await refresh(notebook.id);
+    await syncNotebook(notebook.id);
     setBusy(false);
   }
 
@@ -157,6 +243,8 @@ export default function Page() {
       if (ticks > 45) {
         setResearchError(t.searchTimeout);
         setResearchBusy(false);
+        setPendingResearchId(null);
+        setBusy(false);
         window.clearInterval(timer);
         return;
       }
@@ -172,6 +260,9 @@ export default function Page() {
           if (next.status === "error") {
             setResearchError(next.progress || t.searchTimeout);
             setResearchBusy(false);
+            setError(next.progress || t.searchTimeout);
+            setPendingResearchId(null);
+            setBusy(false);
           }
         })
         .catch((err: Error) => {
@@ -209,6 +300,7 @@ export default function Page() {
       setResearchError(job.progress || t.searchTimeout);
       setResearchBusy(false);
     }
+    await syncNotebook(notebook.id);
   }
 
   function onCancelResearch() {
@@ -233,33 +325,80 @@ export default function Page() {
     await api.importResearch(notebook.id, research.id, selectedCites, true);
     setResearch(null);
     await refresh(notebook.id);
+    await syncNotebook(notebook.id);
     setBusy(false);
   }
 
+  const researchReadyId = research?.status === "ready" ? research.id : "";
+
+  useEffect(() => {
+    if (!notebook || !pendingResearchId || !researchReadyId) return;
+    if (researchReadyId !== pendingResearchId) return;
+    if (resumeOnce.current === researchReadyId) return;
+    resumeOnce.current = researchReadyId;
+    streamChatResume(notebook.id, researchReadyId, (event) => {
+      if (event.event === "warning") {
+        setError(String(event.text || ""));
+      }
+      setLiveParts((parts) => applyChatEvent(parts, event, nextLiveId));
+    }).then(async () => {
+      await refresh(notebook.id);
+      await syncNotebook(notebook.id);
+      setLiveParts([]);
+      setPendingResearchId(null);
+      setBusy(false);
+    });
+  }, [notebook, pendingResearchId, researchReadyId, nextLiveId, refresh, syncNotebook]);
+
+  function onCancelChatResearch() {
+    setPendingResearchId(null);
+    setResearchBusy(false);
+    setBusy(false);
+    if (notebook) {
+      void refresh(notebook.id);
+    }
+    setLiveParts([]);
+  }
+
   async function onSend(text?: string) {
-    if (!notebook) return;
+    if (!notebook || busy) return;
     const content = (text || chatInput).trim();
     if (!content) return;
     setChatInput("");
-    setDraft("");
-    setThoughts([]);
+    setLiveParts([]);
+    setError("");
     setBusy(true);
     setMessages((prev) => [
       ...prev,
       { id: "tmp-user", role: "user", content, citations: [], tool_calls: [], model: null, created_at: new Date().toISOString() },
     ]);
+    let waiting = false;
     await streamChat(notebook.id, content, (event) => {
-      if (event.event === "token") {
-        setDraft((d) => d + String(event.text || ""));
+      if (event.event === "warning") {
+        setError(String(event.text || ""));
       }
-      if (event.event === "thought") {
-        setThoughts((items) => [...items, String(event.text || "")]);
-      }
-      if (event.event === "done") {
-        setDraft("");
+      setLiveParts((parts) => applyChatEvent(parts, event, nextLiveId));
+      if (event.event === "research_pending" || event.research_pending) {
+        waiting = true;
+        const jobId = String(event.job_id || "");
+        setPendingResearchId(jobId);
+        setResearch({
+          id: jobId,
+          query: String(event.query || content),
+          mode: String(event.mode || "fast"),
+          status: "queued",
+          progress: t.searching,
+          report_md: "",
+          candidates: [],
+        });
+        setResearchBusy(true);
+        setActiveSource(null);
       }
     });
+    if (waiting) return;
     await refresh(notebook.id);
+    await syncNotebook(notebook.id);
+    setLiveParts([]);
     setBusy(false);
   }
 
@@ -268,6 +407,10 @@ export default function Page() {
     const next = await api.updateNotebook(notebook.id, {
       provider: notebook.provider,
       model_id: notebook.model_id,
+      tts_provider: notebook.tts_provider,
+      tts_model: notebook.tts_model,
+      image_provider: notebook.image_provider,
+      image_model: notebook.image_model,
       title: notebook.title,
       eu_notice_accepted: euOk,
       openrouter_notice_accepted: orOk,
@@ -281,20 +424,53 @@ export default function Page() {
       setNoteOpen(true);
       return;
     }
-    if (!notebook) return;
-    if (selectedCount === 0) {
+    const ready = sources.filter((source) => source.status === "ready");
+    if (ready.length === 0) {
       setStudioError(t.studioNoSources);
       return;
     }
-    setBusy(true);
+    const selected = ready.filter((source) => source.selected).map((source) => source.id);
+    setStudioSkill(skill);
+    setStudioSourceIds(selected.length > 0 ? selected : ready.map((source) => source.id));
+    setStudioPrompt("");
+    setMediaFormat("briefing");
+    setMediaLanguage("de");
+    setMediaStyle("auto");
     setStudioError("");
-    const result = await api.runSkill(notebook.id, skill.id).catch((err: Error) => {
+  }
+
+  async function onCreateStudio() {
+    if (!notebook || !studioSkill) return;
+    if (studioSourceIds.length === 0) {
+      setStudioError(t.studioNoSources);
+      return;
+    }
+    const skill = studioSkill;
+    const args = {
+      prompt: studioPrompt,
+      source_ids: studioSourceIds,
+      format: mediaFormat,
+      language: mediaLanguage,
+      style: mediaStyle,
+    };
+    setStudioSkill(null);
+    setStudioError("");
+    setBusy(true);
+    setPendingStudio({
+      skillId: skill.id,
+      title: skill.title,
+      type: skill.id.startsWith("studio.") ? skill.id.slice(7) : skill.id,
+    });
+    studioListRef.current?.scrollTo({ top: 0 });
+    const result = await api.runSkill(notebook.id, skill.id, args).catch((err: Error) => {
       setStudioError(err.message);
       return null;
     });
     if (result) {
       await refresh(notebook.id);
+      await syncNotebook(notebook.id);
     }
+    setPendingStudio(null);
     setBusy(false);
   }
 
@@ -310,7 +486,13 @@ export default function Page() {
     <div className="flex h-screen flex-col">
       <header className="flex items-center justify-between border-b border-line px-4 py-2">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-sm text-white">en</div>
+          <button
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-sm text-white"
+            title={t.browseNotebooks}
+            onClick={onBrowse}
+          >
+            en
+          </button>
           <input
             className="bg-transparent text-lg font-medium outline-none"
             value={notebook.title}
@@ -319,6 +501,12 @@ export default function Page() {
           />
         </div>
         <div className="flex items-center gap-2">
+          <button className="rounded-full bg-ink px-3 py-1.5 text-sm text-white" onClick={onCreateNotebook}>
+            + {t.createNotebook}
+          </button>
+          <button className="btn" onClick={onBrowse}>
+            {t.notebooks}
+          </button>
           <span className="rounded-full bg-mist px-3 py-1 text-xs">
             {notebook.provider === "ollama" ? t.local : notebook.provider === "eu" ? t.eu : t.openrouter} · {notebook.model_id.split("/").pop()}
           </span>
@@ -342,10 +530,44 @@ export default function Page() {
       </header>
       <p className="border-b border-line bg-mist px-4 py-1 text-xs text-neutral-600">{t.aiBanner}</p>
 
-      <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[320px_1fr_300px]">
+      <ResizableStages
+        sources={
         <section className="panel">
-          <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center justify-between gap-2 px-4 py-3">
             <h2 className="font-medium">{t.sources}</h2>
+            {sources.length > 1 && (
+              <div className="flex items-center gap-1">
+                <label className="sr-only" htmlFor="source-sort">
+                  {t.sortBy}
+                </label>
+                <select
+                  id="source-sort"
+                  className="max-w-[7.5rem] rounded-full border border-line bg-white px-2 py-1 text-xs"
+                  value={sourceSort.key}
+                  onChange={(e) => {
+                    const key = e.target.value as SourceSort["key"];
+                    const next = { ...sourceSort, key };
+                    setSourceSort(next);
+                    window.localStorage.setItem(SOURCE_SORT_KEY, formatSourceSort(next));
+                  }}
+                >
+                  <option value="created">{t.sortCreated}</option>
+                  <option value="title">{t.sortTitle}</option>
+                  <option value="type">{t.sortType}</option>
+                </select>
+                <button
+                  className="rounded-full border border-line px-2 py-1 text-xs"
+                  title={sourceSort.dir === "asc" ? t.sortAsc : t.sortDesc}
+                  onClick={() => {
+                    const next = { ...sourceSort, dir: sourceSort.dir === "asc" ? "desc" : "asc" } as SourceSort;
+                    setSourceSort(next);
+                    window.localStorage.setItem(SOURCE_SORT_KEY, formatSourceSort(next));
+                  }}
+                >
+                  {sourceSort.dir === "asc" ? "↑" : "↓"}
+                </button>
+              </div>
+            )}
           </div>
           <div className="px-4">
             <button className="btn-primary w-full" onClick={() => setAddOpen(true)}>
@@ -501,7 +723,7 @@ export default function Page() {
               </div>
             ) : (
               <ul className="space-y-2">
-                {sources.map((source) => (
+                {sortedSources.map((source) => (
                   <li key={source.id} className="flex items-start gap-2 rounded-lg border border-line p-2 text-sm">
                     <input
                       type="checkbox"
@@ -517,6 +739,17 @@ export default function Page() {
                       ) : (
                         <div className="text-xs text-neutral-500">{source.type} · {source.status}</div>
                       )}
+                      {source.created_at && (
+                        <div className="text-[11px] text-neutral-400">
+                          {new Date(source.created_at).toLocaleString("de-DE", {
+                            day: "2-digit",
+                            month: "2-digit",
+                            year: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </div>
+                      )}
                     </button>
                     <button
                       className="mt-0.5 shrink-0 px-1 text-neutral-400 hover:text-red-600"
@@ -531,13 +764,14 @@ export default function Page() {
             )}
           </div>
         </section>
-
+        }
+        chat={
         <section className="panel">
           <div className="flex items-center justify-between px-4 py-3">
             <h2 className="font-medium">{t.chat}</h2>
           </div>
           <div className="min-h-0 flex-1 overflow-auto px-6">
-            {messages.length === 0 && !draft ? (
+            {messages.length === 0 && liveParts.length === 0 ? (
               <div className="mx-auto max-w-xl pt-16 text-center">
                 <h3 className="text-2xl font-medium">{t.setup}</h3>
                 <p className="mt-2 text-sm text-neutral-500">{t.setupHint}</p>
@@ -555,38 +789,28 @@ export default function Page() {
               </div>
             ) : (
               <div className="mx-auto max-w-2xl space-y-4 py-4">
-                {thoughts.length > 0 && (
-                  <details className="text-xs text-neutral-500">
-                    <summary>{t.thoughts}</summary>
-                    <ul className="mt-1 list-disc pl-4">
-                      {thoughts.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
                 {messages.map((message) => (
                   <article key={message.id} className={message.role === "user" ? "text-right" : ""}>
                     <div className={`inline-block max-w-full rounded-2xl px-4 py-3 text-sm ${message.role === "user" ? "bg-mist" : "bg-white"}`}>
-                      {message.role === "assistant" && message.reasoning && message.reasoning.length > 0 && (
-                        <details className="mb-2 text-xs text-neutral-500">
-                          <summary>{t.thoughts}</summary>
-                          <ul className="mt-1 list-disc pl-4 text-left">
-                            {message.reasoning.map((item) => (
-                              <li key={item}>{item}</li>
-                            ))}
-                          </ul>
-                        </details>
-                      )}
-                      <ReactMarkdown>{message.content}</ReactMarkdown>
+                      {message.role === "assistant" &&
+                        toolCallsFromMessage(message.tool_calls).map((tool) => <ToolCallCard key={tool.call_id} tool={tool} />)}
+                      {message.content ? <ReactMarkdown>{message.content}</ReactMarkdown> : null}
                       {message.citations?.length > 0 && (
                         <div className="mt-2 flex flex-wrap gap-1">
                           {message.citations.map((c) => (
                             <button
-                              key={`${c.n}-${c.chunk_id}`}
+                              key={`${c.n}-${c.chunk_id || c.url || c.title}`}
                               className="rounded bg-blue-50 px-1.5 text-xs text-accent"
                               title={c.quote}
-                              onClick={() => api.source(notebook.id, c.source_id).then(setActiveSource)}
+                              onClick={() => {
+                                if (c.source_id) {
+                                  api.source(notebook.id, c.source_id).then(setActiveSource);
+                                  return;
+                                }
+                                if (c.url) {
+                                  window.open(c.url, "_blank", "noopener,noreferrer");
+                                }
+                              }}
                             >
                               [{c.n}]
                             </button>
@@ -596,7 +820,12 @@ export default function Page() {
                       {message.role === "assistant" && (
                         <button
                           className="mt-2 text-xs text-accent"
-                          onClick={() => api.createNote(notebook.id, t.newNote, message.content, message.id).then(() => refresh(notebook.id))}
+                          onClick={() =>
+                            api.createNote(notebook.id, t.newNote, message.content, message.id).then(async () => {
+                              await refresh(notebook.id);
+                              await syncNotebook(notebook.id);
+                            })
+                          }
                         >
                           {t.saveNote}
                         </button>
@@ -604,10 +833,17 @@ export default function Page() {
                     </div>
                   </article>
                 ))}
-                {draft && (
+                {liveParts.length > 0 && (
                   <article>
-                    <div className="rounded-2xl px-4 py-3 text-sm">
-                      <ReactMarkdown>{draft}</ReactMarkdown>
+                    <div className="rounded-2xl bg-white px-4 py-3 text-sm">
+                      {pendingResearchId && <p className="mb-2 text-xs text-neutral-500">{t.researchWait}</p>}
+                      {liveParts.map((part) =>
+                        part.kind === "tool" ? (
+                          <ToolCallCard key={part.id} tool={part.tool} />
+                        ) : (
+                          <ReactMarkdown key={part.id}>{part.text}</ReactMarkdown>
+                        ),
+                      )}
                     </div>
                   </article>
                 )}
@@ -625,7 +861,7 @@ export default function Page() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    onSend();
+                    if (!busy) onSend();
                   }
                 }}
               />
@@ -636,6 +872,11 @@ export default function Page() {
                 </label>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-neutral-500">{t.sourcesCount(selectedCount)}</span>
+                  {pendingResearchId && (
+                    <button className="btn" type="button" onClick={onCancelChatResearch}>
+                      {t.cancelChat}
+                    </button>
+                  )}
                   <button className="btn-primary" disabled={busy} onClick={() => onSend()}>
                     →
                   </button>
@@ -644,35 +885,49 @@ export default function Page() {
             </div>
           </div>
         </section>
-
+        }
+        studio={
         <section className="panel border-r-0">
           <div className="px-4 py-3">
             <h2 className="font-medium">{t.studio}</h2>
           </div>
           <div className="grid grid-cols-2 gap-2 px-4">
             {skills.map((skill) => (
-              <button
-                key={skill.id}
-                disabled={skill.status === "locked" || busy}
-                onClick={() => onRunSkill(skill)}
-                className={`rounded-xl border border-line p-3 text-left text-xs ${skill.status === "locked" ? "opacity-50" : "hover:bg-mist"}`}
-              >
-                <div className="font-medium">{skill.title}</div>
-                {skill.status === "locked" && <div className="text-neutral-400">{t.locked}</div>}
-              </button>
+              <StudioSkillButton key={skill.id} skill={skill} busy={busy} onRun={onRunSkill} />
             ))}
           </div>
-          <div className="min-h-0 flex-1 overflow-auto px-4 py-4 text-sm">
+          <div ref={studioListRef} className="min-h-0 flex-1 overflow-auto px-4 py-4 text-sm">
             {studioError && <p className="mb-3 text-xs text-red-600">{studioError}</p>}
-            {busy && <p className="mb-3 text-xs text-neutral-500">{t.generating}</p>}
-            {artifacts.length === 0 ? (
+            {artifacts.length === 0 && !pendingStudio ? (
               <p className="text-neutral-500">
                 {t.studioEmpty} {t.studioHint}
               </p>
             ) : (
               <ul className="space-y-2">
+                {pendingStudio && (
+                  <ArtifactCard
+                    artifact={{
+                      id: "pending-studio",
+                      skill_id: pendingStudio.skillId,
+                      type: pendingStudio.type,
+                      title: pendingStudio.title,
+                      payload: { status: "pending" },
+                      created_at: "",
+                    }}
+                    notebookId={notebook.id}
+                    loading
+                  />
+                )}
                 {artifacts.map((artifact) => (
-                  <ArtifactCard key={artifact.id} artifact={artifact} notebookId={notebook.id} />
+                  <ArtifactCard
+                    key={artifact.id}
+                    artifact={artifact}
+                    notebookId={notebook.id}
+                    onImported={async () => {
+                      await refresh(notebook.id);
+                      await syncNotebook(notebook.id);
+                    }}
+                  />
                 ))}
               </ul>
             )}
@@ -683,8 +938,18 @@ export default function Page() {
             </button>
           </div>
         </section>
-      </main>
+        }
+      />
       <SiteFooter extra={t.footer} />
+      {browseOpen && (
+        <NotebookBrowser
+          notebooks={notebooks}
+          activeId={notebook.id}
+          onOpen={openNotebook}
+          onCreate={onCreateNotebook}
+          onClose={() => setBrowseOpen(false)}
+        />
+      )}
 
       {addOpen && (
         <Modal title={t.addSources} onClose={() => !addBusy && setAddOpen(false)}>
@@ -721,6 +986,27 @@ export default function Page() {
         </Modal>
       )}
 
+      {studioSkill && (
+        <StudioRunModal
+          skill={studioSkill}
+          sources={sources}
+          sourceIds={studioSourceIds}
+          prompt={studioPrompt}
+          format={mediaFormat}
+          language={mediaLanguage}
+          style={mediaStyle}
+          busy={busy}
+          error={studioError}
+          onClose={() => !busy && setStudioSkill(null)}
+          onSourceIds={setStudioSourceIds}
+          onPrompt={setStudioPrompt}
+          onFormat={setMediaFormat}
+          onLanguage={setMediaLanguage}
+          onStyle={setMediaStyle}
+          onCreate={onCreateStudio}
+        />
+      )}
+
       {noteOpen && (
         <Modal title={t.newNote} onClose={() => setNoteOpen(false)}>
           <textarea className="h-40 w-full rounded border border-line p-2" value={noteBody} onChange={(e) => setNoteBody(e.target.value)} />
@@ -731,6 +1017,7 @@ export default function Page() {
               setNoteBody("");
               setNoteOpen(false);
               await refresh(notebook.id);
+              await syncNotebook(notebook.id);
             }}
           >
             {t.addNote}
@@ -741,34 +1028,33 @@ export default function Page() {
       {settingsOpen && (
         <Modal title={t.settings} onClose={() => setSettingsOpen(false)}>
           <div className="space-y-3 text-sm">
-            {providers.map((provider) => (
-              <div key={provider.id} className="rounded-lg border border-line p-3">
-                <label className="flex items-center gap-2 font-medium">
-                  <input
-                    type="radio"
-                    name="provider"
-                    checked={notebook.provider === provider.id}
-                    disabled={!provider.available}
-                    onChange={() => setNotebook({ ...notebook, provider: provider.id, model_id: provider.models[0]?.id || notebook.model_id })}
-                  />
-                  {provider.label}
-                </label>
-                <p className="mt-1 text-xs text-neutral-500">{provider.notice}</p>
-                {provider.models.length > 0 && notebook.provider === provider.id && (
-                  <select
-                    className="mt-2 w-full rounded border border-line p-1"
-                    value={notebook.model_id}
-                    onChange={(e) => setNotebook({ ...notebook, model_id: e.target.value })}
-                  >
-                    {provider.models.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.label}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            ))}
+            <ModalityBlock
+              title={t.chatModel}
+              lanes={modalities?.llm || providers}
+              provider={notebook.provider}
+              modelId={notebook.model_id}
+              name="llm"
+              onProvider={(id, model) => setNotebook({ ...notebook, provider: id, model_id: model })}
+              onModel={(model) => setNotebook({ ...notebook, model_id: model })}
+            />
+            <ModalityBlock
+              title={t.speechModel}
+              lanes={modalities?.tts || []}
+              provider={notebook.tts_provider || "local"}
+              modelId={notebook.tts_model || ""}
+              name="tts"
+              onProvider={(id, model) => setNotebook({ ...notebook, tts_provider: id, tts_model: model })}
+              onModel={(model) => setNotebook({ ...notebook, tts_model: model })}
+            />
+            <ModalityBlock
+              title={t.imageModel}
+              lanes={modalities?.image || []}
+              provider={notebook.image_provider || "local"}
+              modelId={notebook.image_model || ""}
+              name="image"
+              onProvider={(id, model) => setNotebook({ ...notebook, image_provider: id, image_model: model })}
+              onModel={(model) => setNotebook({ ...notebook, image_model: model })}
+            />
             <label className="flex gap-2 text-xs">
               <input type="checkbox" checked={euOk} onChange={(e) => setEuOk(e.target.checked)} />
               {t.acceptEu}
@@ -798,7 +1084,16 @@ export default function Page() {
               className="btn"
               onClick={async () => {
                 await api.eraseNotebook(notebook.id);
-                window.location.reload();
+                const remaining = notebooks.filter((item) => item.id !== notebook.id);
+                if (remaining[0]) {
+                  setNotebooks(remaining);
+                  await openNotebook(remaining[0]);
+                } else {
+                  const created = await api.createNotebook();
+                  setNotebooks([created]);
+                  await openNotebook(created);
+                }
+                setSettingsOpen(false);
               }}
             >
               Löschen
@@ -817,6 +1112,60 @@ export default function Page() {
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+function ModalityBlock({
+  title,
+  lanes,
+  provider,
+  modelId,
+  name,
+  onProvider,
+  onModel,
+}: {
+  title: string;
+  lanes: Provider[];
+  provider: string;
+  modelId: string;
+  name: string;
+  onProvider: (id: string, model: string) => void;
+  onModel: (model: string) => void;
+}) {
+  return (
+    <div>
+      <p className="mb-2 font-medium">{title}</p>
+      <div className="space-y-2">
+        {lanes.map((lane) => (
+          <div key={`${name}-${lane.id}`} className="rounded-lg border border-line p-3">
+            <label className="flex items-center gap-2 font-medium">
+              <input
+                type="radio"
+                name={name}
+                checked={provider === lane.id}
+                disabled={!lane.available}
+                onChange={() => onProvider(lane.id, lane.models[0]?.id || modelId)}
+              />
+              {lane.label}
+            </label>
+            <p className="mt-1 text-xs text-neutral-500">{lane.notice}</p>
+            {lane.models.length > 0 && provider === lane.id && (
+              <select
+                className="mt-2 w-full rounded border border-line p-1"
+                value={modelId}
+                onChange={(e) => onModel(e.target.value)}
+              >
+                {lane.models.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

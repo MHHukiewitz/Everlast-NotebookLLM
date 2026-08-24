@@ -1,0 +1,59 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
+import { t } from "@/lib/i18n";
+import type { VideoScene } from "@/lib/types";
+
+export function VideoView({
+  notebookId,
+  artifactId,
+  scenes,
+  status,
+}: {
+  notebookId: string;
+  artifactId: string;
+  scenes: VideoScene[];
+  status?: string;
+}) {
+  const [src, setSrc] = useState("");
+  useEffect(() => {
+    if (status !== "ready") return;
+    let objectUrl = "";
+    let cancelled = false;
+    fetch(api.artifactMediaUrl(notebookId, artifactId), { credentials: "include" })
+      .then(async (response) => {
+        if (!response.ok || cancelled) return;
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (!cancelled) setSrc(objectUrl);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [artifactId, notebookId, status]);
+  return (
+    <div className="text-xs">
+      {status === "pending" && <p className="mb-2 text-neutral-500">{t.mediaPending}</p>}
+      {src && <video className="mb-2 w-full rounded border border-line" controls src={src} />}
+      <ol className="space-y-3 text-neutral-700">
+        {scenes.map((scene, index) => (
+          <li key={`${scene.heading}-${index}`}>
+            <p className="font-medium">
+              {index + 1}. {scene.heading}
+            </p>
+            <ul className="mt-1 list-disc pl-4">
+              {(scene.bullets || []).map((bullet) => (
+                <li key={bullet}>{bullet}</li>
+              ))}
+            </ul>
+            {scene.narration && <p className="mt-1 text-neutral-500">{scene.narration}</p>}
+          </li>
+        ))}
+      </ol>
+      <p className="mt-2 text-[11px] text-neutral-400">{t.aiBanner}</p>
+    </div>
+  );
+}

@@ -1,4 +1,4 @@
-import type { Artifact, AuthUser, Message, Notebook, Provider, ResearchJob, Skill, Source, SourceDetail } from "./types";
+import type { Artifact, AuthUser, Message, Modalities, Notebook, Provider, ResearchJob, Skill, Source, SourceDetail } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -51,6 +51,7 @@ export const api = {
   logout: () => req<{ status: string }>("/api/auth/logout", { method: "POST" }),
   deleteAccount: () => req<{ status: string }>("/api/auth/me", { method: "DELETE" }),
   providers: () => req<Provider[]>("/api/providers"),
+  modalities: () => req<Modalities>("/api/modalities"),
   notebooks: () => req<Notebook[]>("/api/notebooks"),
   createNotebook: () => req<Notebook>("/api/notebooks", { method: "POST" }),
   notebook: (id: string) => req<Notebook>(`/api/notebooks/${id}`),
@@ -75,6 +76,10 @@ export const api = {
   artifacts: (id: string) => req<Artifact[]>(`/api/notebooks/${id}/artifacts`),
   artifactExportUrl: (notebookId: string, artifactId: string, format: string) =>
     `${BASE}/api/notebooks/${notebookId}/artifacts/${artifactId}/export?format=${format}`,
+  artifactToSource: (notebookId: string, artifactId: string) =>
+    req<Source>(`/api/notebooks/${notebookId}/artifacts/${artifactId}/source`, { method: "POST" }),
+  artifactMediaUrl: (notebookId: string, artifactId: string) =>
+    `${BASE}/api/notebooks/${notebookId}/artifacts/${artifactId}/media`,
   createNote: (id: string, title: string, body: string, messageId?: string) =>
     req<Artifact>(`/api/notebooks/${id}/notes`, {
       method: "POST",
@@ -188,17 +193,7 @@ export async function uploadFile(notebookId: string, file: File): Promise<Source
   return response.json();
 }
 
-export async function streamChat(
-  notebookId: string,
-  content: string,
-  onEvent: (event: Record<string, unknown>) => void,
-): Promise<void> {
-  const response = await fetch(`${BASE}/api/notebooks/${notebookId}/chat`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
-  });
+async function readSse(response: Response, onEvent: (event: Record<string, unknown>) => void): Promise<void> {
   if (!response.ok || !response.body) {
     throw new ApiError(await response.text(), response.status);
   }
@@ -217,4 +212,32 @@ export async function streamChat(
       onEvent(JSON.parse(line));
     }
   }
+}
+
+export async function streamChat(
+  notebookId: string,
+  content: string,
+  onEvent: (event: Record<string, unknown>) => void,
+): Promise<void> {
+  const response = await fetch(`${BASE}/api/notebooks/${notebookId}/chat`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  await readSse(response, onEvent);
+}
+
+export async function streamChatResume(
+  notebookId: string,
+  jobId: string,
+  onEvent: (event: Record<string, unknown>) => void,
+): Promise<void> {
+  const response = await fetch(`${BASE}/api/notebooks/${notebookId}/chat/resume`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: jobId }),
+  });
+  await readSse(response, onEvent);
 }
