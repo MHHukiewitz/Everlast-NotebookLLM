@@ -333,8 +333,10 @@ def _slides_pptx(title: str, payload: dict[str, Any]) -> bytes:
 def _audio_md(title: str, payload: dict[str, Any]) -> str:
     parts = [f"# {title}", ""]
     for turn in payload.get("turns") or []:
-        speaker = str(turn.get("speaker") or "A")
-        parts.append(f"**{speaker}:** {turn.get('text') or ''}")
+        text = str(turn.get("text") or "").strip()
+        if not text:
+            continue
+        parts.append(text)
         parts.append("")
     parts.append(AI_MARK)
     return "\n".join(parts) + "\n"

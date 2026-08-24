@@ -75,10 +75,16 @@ def test_prepare_report_needs_cite() -> None:
 
 
 def test_prepare_audio_and_video() -> None:
-    turns = [{"speaker": "A", "text": "Hallo"}, {"speaker": "B", "text": "Hi"}]
+    turns = [{"text": "Hallo"}, {"text": "Hi"}]
     assert prepare_audio({"turns": turns}, min_turns=6)[0] is False
-    turns = [{"speaker": "A" if index % 2 == 0 else "B", "text": f"T{index}"} for index in range(6)]
+    turns = [{"text": f"T{index}"} for index in range(6)]
     assert prepare_audio({"turns": turns}) == (True, "")
+    one_voice = [{"speaker": "A", "text": f"T{index}"} for index in range(6)]
+    assert prepare_audio({"turns": one_voice}) == (True, "")
+    dialog = [{"speaker": "A" if index % 2 == 0 else "B", "text": f"T{index}"} for index in range(6)]
+    ok, reason = prepare_audio({"turns": dialog})
+    assert ok is False
+    assert "Dialog" in reason
     scenes = [{"heading": "H", "bullets": ["a", "b", "c"], "narration": "N"}]
     assert prepare_video({"scenes": scenes})[0] is False
     scenes = [{"heading": f"H{index}", "bullets": ["a", "b", "c"], "narration": "N"} for index in range(4)]
@@ -86,10 +92,8 @@ def test_prepare_audio_and_video() -> None:
 
 
 def test_prepare_audio_and_video_reject_filler_in_eval() -> None:
-    turns = [
-        {"speaker": "A" if index % 2 == 0 else "B", "text": f"T{index}"} for index in range(5)
-    ]
-    turns.append({"speaker": "B", "text": "Unser Ziel ist es, präzise Ergebnisse zu liefern."})
+    turns = [{"text": f"T{index}"} for index in range(5)]
+    turns.append({"text": "Unser Ziel ist es, präzise Ergebnisse zu liefern."})
     scenes = [
         {"heading": f"H{index}", "bullets": ["a", "b", "c"], "narration": "N"} for index in range(3)
     ]

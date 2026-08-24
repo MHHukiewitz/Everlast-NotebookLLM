@@ -43,8 +43,7 @@ export function AudioView({
       {src && <audio className="mb-2 w-full" controls src={src} />}
       <ol className="space-y-2 text-neutral-700">
         {turns.map((turn, index) => (
-          <li key={`${turn.speaker}-${index}`}>
-            <span className="font-medium">{turn.speaker}:</span>{" "}
+          <li key={index}>
             <CiteText text={turn.text} citations={citations} onCite={onCite} />
           </li>
         ))}

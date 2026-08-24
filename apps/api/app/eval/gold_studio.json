@@ -78,7 +78,7 @@
     "task": "studio_audio",
     "skill_id": "studio.audio",
     "question": "Erzeuge eine Audio-Zusammenfassung aus der Gold-Quelle.",
-    "expected_answer": "Das Skript nennt Ingest, Embeddings, Retrieval und Modell. Es hat mindestens sechs Sprecherwechsel. Es erfindet keine Umsätze oder Adressen.",
+    "expected_answer": "Das Skript nennt Ingest, Embeddings, Retrieval und Modell. Es ist ein Monolog mit mindestens sechs Absätzen. Es erfindet keine Umsätze oder Adressen.",
     "keywords": ["Ingest", "Embeddings", "Retrieval", "Modell"],
     "forbidden": ["Jahresumsatz", "Privatadresse", "Geschäftsführung", "everlaw.com", "Unser Ziel ist es"],
     "min_turns": 6,

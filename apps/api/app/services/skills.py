@@ -226,7 +226,7 @@ REGISTRY: dict[str, Skill] = {
         _notes_create,
     ),
     "studio.audio": Skill(
-        SkillCard(id="studio.audio", title="Audio-Zusammenfassung", description="Gespräch aus den gewählten Quellen", status="available", icon="audio"),
+        SkillCard(id="studio.audio", title="Audio-Zusammenfassung", description="Monolog aus den gewählten Quellen", status="available", icon="audio"),
         "Erzeugt ein deutsches Audio-Skript und Sprache aus den gewählten Quellen.",
         {
             "type": "object",
@@ -338,7 +338,7 @@ REGISTRY: dict[str, Skill] = {
 
 STUDIO_CATALOG = [
     SkillCard(id="notes.create", title="Notiz", description="Notiz schreiben oder aus dem Chat speichern", status="available", icon="note"),
-    SkillCard(id="studio.audio", title="Audio-Zusammenfassung", description="Gespräch aus den gewählten Quellen", status="available", icon="audio"),
+    SkillCard(id="studio.audio", title="Audio-Zusammenfassung", description="Monolog aus den gewählten Quellen", status="available", icon="audio"),
     SkillCard(id="studio.slides", title="Präsentation", description="Folien aus den gewählten Quellen", status="available", icon="slides"),
     SkillCard(id="studio.video", title="Videoübersicht", description="Video aus den gewählten Quellen", status="available", icon="video"),
     SkillCard(

@@ -18,6 +18,8 @@ from app.services.piper_tts import synthesize_wav
 from app.services.pdf import AI_MARK
 
 PAUSE_SEC = 0.35
+END_PAD_SEC = 0.35
+CLIP_PAD_SEC = 0.2
 FRAME_SIZE = (1280, 720)
 STYLES = {
     "classic": {"bg": (255, 255, 255), "fg": (31, 31, 31), "muted": (115, 115, 115)},
@@ -62,7 +64,7 @@ def _run(cmd: list[str]) -> None:
         raise ValueError("ffmpeg konnte die Datei nicht schreiben.")
 
 
-def _duration(path: Path) -> float:
+def media_duration(path: Path) -> float:
     result = subprocess.run(
         [
             "ffprobe",
@@ -78,8 +80,15 @@ def _duration(path: Path) -> float:
         text=True,
     )
     if result.returncode != 0 or not result.stdout.strip():
+        return 0.0
+    return float(result.stdout.strip())
+
+
+def _duration(path: Path) -> float:
+    seconds = media_duration(path)
+    if seconds <= 0:
         return 4.0
-    return max(1.5, float(result.stdout.strip()))
+    return max(1.5, seconds)
 
 
 GERMAN_SPEECH_STYLE = "Sprich klar und natürlich auf Deutsch. Kein Englisch."
@@ -114,7 +123,21 @@ def speech_payload(route: dict[str, Any], text: str, voice: str, language: str |
 
 def wav_to_mp3(wav: Path) -> bytes:
     dest = wav.with_suffix(".mp3")
-    _run(["ffmpeg", "-y", "-i", str(wav), "-q:a", "9", "-acodec", "libmp3lame", str(dest)])
+    _run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(wav),
+            "-af",
+            f"apad=pad_dur={CLIP_PAD_SEC}",
+            "-q:a",
+            "9",
+            "-acodec",
+            "libmp3lame",
+            str(dest),
+        ]
+    )
     if not dest.exists() or dest.stat().st_size == 0:
         raise ValueError("ffmpeg konnte die Sprachdatei nicht schreiben.")
     return dest.read_bytes()
@@ -173,10 +196,17 @@ def write_silence(path: Path, seconds: float = PAUSE_SEC) -> None:
     )
 
 
+def hold_durations(clips: list[Path]) -> list[float]:
+    durations = [_duration(clip) for clip in clips]
+    if not durations:
+        return []
+    for index in range(len(durations) - 1):
+        durations[index] += PAUSE_SEC
+    durations[-1] += END_PAD_SEC
+    return durations
+
+
 def concat_mp3(clips: list[Path], dest: Path) -> None:
-    if len(clips) == 1:
-        dest.write_bytes(clips[0].read_bytes())
-        return
     if shutil.which("ffmpeg") is None:
         dest.write_bytes(b"".join(clip.read_bytes() for clip in clips))
         return
@@ -201,8 +231,12 @@ def concat_mp3(clips: list[Path], dest: Path) -> None:
             "0",
             "-i",
             str(listing),
-            "-c",
-            "copy",
+            "-af",
+            f"apad=pad_dur={END_PAD_SEC}",
+            "-q:a",
+            "9",
+            "-acodec",
+            "libmp3lame",
             str(dest),
         ]
     )
@@ -321,36 +355,42 @@ def join_video(frames: list[tuple[Path, float]], audio: Path, dest: Path) -> Non
     require_ffmpeg()
     work = dest.parent / f"{dest.stem}-edit"
     work.mkdir(parents=True, exist_ok=True)
+    holds = list(frames)
+    audio_dur = media_duration(audio)
+    visual_dur = sum(seconds for _, seconds in holds)
+    if holds and audio_dur > visual_dur:
+        last, seconds = holds[-1]
+        holds[-1] = (last, seconds + audio_dur - visual_dur)
     listing = work / "frames.txt"
     lines: list[str] = []
-    for frame, seconds in frames:
+    for frame, seconds in holds:
         lines.append(f"file '{frame.resolve()}'")
         lines.append(f"duration {seconds}")
-    if frames:
-        lines.append(f"file '{frames[-1][0].resolve()}'")
+    if holds:
+        lines.append(f"file '{holds[-1][0].resolve()}'")
     listing.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    _run(
-        [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(listing),
-            "-i",
-            str(audio),
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-shortest",
-            str(dest),
-        ]
-    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(listing),
+        "-i",
+        str(audio),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+    ]
+    if audio_dur > 0:
+        cmd.extend(["-t", f"{audio_dur:.3f}"])
+    cmd.append(str(dest))
+    _run(cmd)
 
 
 def clip_duration(path: Path) -> float:

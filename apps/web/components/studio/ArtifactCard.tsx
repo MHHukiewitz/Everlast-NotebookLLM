@@ -39,7 +39,7 @@ function preview(artifact: Artifact): string {
   if (artifact.type === "mindmap") return "Mindmap";
   if (artifact.type === "slides") return `${artifact.payload.slides?.length || 0} Folien`;
   if (artifact.type === "infographic") return `${artifact.payload.items?.length || 0} Blöcke`;
-  if (artifact.type === "audio") return `${artifact.payload.turns?.length || 0} Wechsel`;
+  if (artifact.type === "audio") return `${artifact.payload.turns?.length || 0} Absätze`;
   if (artifact.type === "video") return `${artifact.payload.scenes?.length || 0} Szenen`;
   return "";
 }

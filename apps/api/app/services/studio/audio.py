@@ -12,29 +12,35 @@ FILLER = "unser ziel ist es"
 
 SYSTEM_BRIEFING = """Du bist Everlast Notebook, ein KI-System. Sage das klar.
 Erzeuge ein Audio-Skript nur aus den gelieferten Quellen.
-Zwei Sprecher: A und B. Kurzes Briefing.
-Sechs bis zehn Wechsel.
-Jeder Wechsel nennt einen Fakt aus dem Quellenkontext.
+Ein Sprecher. Ein Monolog. Kein Dialog. Keine Sprecher A und B. Kein Interview.
+Kurzes Briefing.
+Sechs bis zehn Absätze.
+Jeder Absatz nennt einen Fakt aus dem Quellenkontext.
 Keine Begrüßung ohne Fakt.
 Erfinde keine Fakten.
-Jeder Sprechertext ist vollständig auf {language}.
+Der gesamte Text ist vollständig auf {language}.
 Keine englischen Sätze, außer ein Quellen-Zitat ist auf Englisch.
+Klare Sätze für Sprachausgabe.
+Sprich keine Quellennummern und keine Klammermarken wie [1].
 Antworte nur mit einem JSON-Objekt.
-Schema: {{"title": "string", "turns": [{{"speaker": "A", "text": "string"}}]}}
+Schema: {{"title": "string", "turns": [{{"text": "string"}}]}}
 Sprache: {language}.
 """
 
 SYSTEM_EXPLAINER = """Du bist Everlast Notebook, ein KI-System. Sage das klar.
 Erzeuge ein Audio-Skript nur aus den gelieferten Quellen.
-Zwei Sprecher: A und B. Längeres Erklärgespräch.
-Zwölf bis achtzehn Wechsel.
-Jeder Wechsel nennt einen Fakt aus dem Quellenkontext.
+Ein Sprecher. Ein Monolog. Kein Dialog. Keine Sprecher A und B. Kein Interview.
+Längerer erklärender Monolog.
+Zwölf bis achtzehn Absätze.
+Jeder Absatz nennt einen Fakt aus dem Quellenkontext.
 Keine Begrüßung ohne Fakt.
 Erfinde keine Fakten.
-Jeder Sprechertext ist vollständig auf {language}.
+Der gesamte Text ist vollständig auf {language}.
 Keine englischen Sätze, außer ein Quellen-Zitat ist auf Englisch.
+Klare Sätze für Sprachausgabe.
+Sprich keine Quellennummern und keine Klammermarken wie [1].
 Antworte nur mit einem JSON-Objekt.
-Schema: {{"title": "string", "turns": [{{"speaker": "A", "text": "string"}}]}}
+Schema: {{"title": "string", "turns": [{{"text": "string"}}]}}
 Sprache: {language}.
 """
 
@@ -42,17 +48,26 @@ def _language_label(code: str) -> str:
     return "Englisch" if tts_language_code(code) == "en" else "Deutsch"
 
 
+def _dialog_speakers(turns: list[Any]) -> bool:
+    speakers = {
+        str(turn.get("speaker") or "").strip().upper()
+        for turn in turns
+        if isinstance(turn, dict) and str(turn.get("speaker") or "").strip()
+    }
+    return bool(speakers & {"A", "1"}) and bool(speakers & {"B", "2"})
+
+
 def prepare_audio(payload: dict[str, Any], min_turns: int = 6) -> tuple[bool, str]:
     turns = payload.get("turns")
     if not isinstance(turns, list) or len(turns) < min_turns:
-        return False, "zu wenige Sprecherwechsel"
+        return False, "zu wenige Absätze"
+    if _dialog_speakers(turns):
+        return False, "Dialog statt Monolog"
     for turn in turns:
         if not isinstance(turn, dict):
-            return False, "Wechsel fehlt"
+            return False, "Absatz fehlt"
         if not str(turn.get("text") or "").strip():
-            return False, "Wechsel ohne Text"
-        if str(turn.get("speaker") or "") not in {"A", "B"}:
-            return False, "Sprecher ist nicht A oder B"
+            return False, "Absatz ohne Text"
         if EVAL_MODE.get() and FILLER in str(turn.get("text") or "").casefold():
             return False, "leere Floskel"
     return True, ""
@@ -92,12 +107,13 @@ async def synthesize_audio(session: AsyncSession, notebook: Notebook, artifact: 
     work = artifact_dir(notebook.id) / f"{artifact.id}-clips"
     work.mkdir(parents=True, exist_ok=True)
     clips = []
+    voice = voice_for("A", language)
     for index, turn in enumerate(turns):
         text = str(turn.get("text") or "").strip()
         if not text:
             continue
         clip = work / f"{index:03d}.mp3"
-        clip.write_bytes(speak(notebook, text, voice_for(str(turn.get("speaker") or "A"), language), language))
+        clip.write_bytes(speak(notebook, text, voice, language))
         clips.append(clip)
     if not clips:
         raise ValueError("Das Audio-Skript hat keinen Text.")

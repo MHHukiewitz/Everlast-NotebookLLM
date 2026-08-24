@@ -8,8 +8,8 @@ from app.services.modalities import require_tts, tts_language_code
 from app.services.studio.generate import EVAL_MODE, STUDIO_USER, generate_json, save_artifact, source_ids_from_args, topic_from_args
 from app.services.studio.media import (
     artifact_dir,
-    clip_duration,
     concat_mp3,
+    hold_durations,
     join_video,
     media_file,
     require_ffmpeg,
@@ -117,7 +117,7 @@ async def synthesize_video(session: AsyncSession, notebook: Notebook, artifact: 
     work = artifact_dir(notebook.id) / f"{artifact.id}-video"
     work.mkdir(parents=True, exist_ok=True)
     clips = []
-    frames: list[tuple[Any, float]] = []
+    stills: list[Any] = []
     for index, scene in enumerate(scenes):
         heading = str(scene.get("heading") or "")
         bullets = [str(item) for item in scene.get("bullets") or []]
@@ -127,13 +127,13 @@ async def synthesize_video(session: AsyncSession, notebook: Notebook, artifact: 
         clips.append(clip)
         frame = work / f"{index:03d}.png"
         write_frame(notebook, heading, bullets, style, frame)
-        frames.append((frame, clip_duration(clip)))
+        stills.append(frame)
     if not clips:
         raise ValueError("Die Video-Szenen haben keinen Text.")
     audio = work / "narration.mp3"
     concat_mp3(clips, audio)
     dest = media_file(notebook.id, artifact.id, "mp4")
-    join_video(frames, audio, dest)
+    join_video(list(zip(stills, hold_durations(clips))), audio, dest)
     payload = dict(artifact.payload or {})
     payload["status"] = "ready"
     payload["video_path"] = str(dest)

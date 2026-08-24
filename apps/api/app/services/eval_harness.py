@@ -207,7 +207,6 @@ def flatten_studio_payload(payload: dict[str, Any], artifact_type: str) -> str:
     if artifact_type == "audio":
         parts = [title]
         for turn in payload.get("turns") or []:
-            parts.append(str(turn.get("speaker") or ""))
             parts.append(str(turn.get("text") or ""))
         return "\n".join(parts)
     if artifact_type == "video":

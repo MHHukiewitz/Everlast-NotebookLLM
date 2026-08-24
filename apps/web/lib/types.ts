@@ -129,7 +129,7 @@ export type InfographicChart = {
 };
 
 export type AudioTurn = {
-  speaker: string;
+  speaker?: string;
   text: string;
 };
 

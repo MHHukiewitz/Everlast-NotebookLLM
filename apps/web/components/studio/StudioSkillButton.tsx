@@ -11,7 +11,7 @@ type Look = {
 
 function Glyph({ children }: { children: React.ReactNode }) {
   return (
-    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
       {children}
     </svg>
   );
@@ -139,9 +139,9 @@ export function StudioSkillButton({
       onClick={() => onRun(skill)}
       className={`studio-skill ${look.tint} ${active ? "is-active" : ""} ${locked ? "opacity-50" : "hover:brightness-[0.97]"}`}
     >
-      {look.icon}
-      <span className="min-w-0 font-medium">{skill.title}</span>
-      {locked && <span className="text-neutral-400">{t.locked}</span>}
+      <div className="mb-2">{look.icon}</div>
+      <div className="font-medium">{skill.title}</div>
+      {locked && <div className="text-neutral-400">{t.locked}</div>}
     </button>
   );
 }

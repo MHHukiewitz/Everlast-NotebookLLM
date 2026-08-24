@@ -19,11 +19,11 @@ body {
 }
 
 .studio-skills {
-  @apply mb-3 grid grid-cols-2 gap-1;
+  @apply mb-3 grid grid-cols-2 gap-2;
 }
 
 .studio-skill {
-  @apply flex min-h-0 items-center gap-1.5 rounded-lg border border-line px-2 py-1 text-left text-[11px] leading-tight;
+  @apply rounded-xl border border-line p-3 text-left text-xs;
 }
 
 .studio-skill.is-active {

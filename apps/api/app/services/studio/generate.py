@@ -44,7 +44,7 @@ INVALID_STUDIO = {
     "cards": [{"front": "Keine Ausgabe", "back": "Keine Ausgabe", "cite": ""}],
     "columns": ["Feld", "Wert"],
     "rows": [["Status", "Keine gültige Studio-Ausgabe"]],
-    "turns": [{"speaker": "A", "text": "Keine gültige Studio-Ausgabe"}],
+    "turns": [{"text": "Keine gültige Studio-Ausgabe"}],
     "scenes": [
         {
             "heading": "Keine Ausgabe",

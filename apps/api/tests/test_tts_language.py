@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.modalities import require_tts, tts_language_code
-from app.services.studio.audio import SYSTEM_BRIEFING, _language_label
+from app.services.studio.audio import SYSTEM_BRIEFING, SYSTEM_EXPLAINER, _language_label
 from app.services.studio.media import GERMAN_SPEECH_STYLE, OPENAI_TO_PIPER, speech_payload, speech_style, voice_for
 
 
@@ -22,6 +22,15 @@ def test_audio_script_prompt_is_german() -> None:
     assert "Deutsch" in prompt
     assert "vollständig auf Deutsch" in prompt
     assert "Keine englischen Sätze" in prompt
+    assert "Monolog" in prompt
+    assert "Kein Dialog" in prompt
+    assert "Keine Sprecher A und B" in prompt
+    assert "Zwei Sprecher" not in prompt
+    assert '"speaker"' not in prompt
+    explainer = SYSTEM_EXPLAINER.format(language=language)
+    assert "Monolog" in explainer
+    assert "Kein Dialog" in explainer
+    assert "Zwei Sprecher" not in explainer
 
 
 def test_german_voices_map_openai_aliases(monkeypatch: pytest.MonkeyPatch) -> None:

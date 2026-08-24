@@ -22,6 +22,7 @@ import {
 import { ThinkingTrace } from "@/components/chat/ThinkingTrace";
 import { t } from "@/lib/i18n";
 import { ACTIVE_NOTEBOOK_KEY, SOURCE_SORT_KEY } from "@/lib/notebook";
+import { panelLocks } from "@/lib/panelLocks";
 import { displayUrl, isHttpUrl, sourceFavicon } from "@/lib/source";
 import { DEFAULT_SOURCE_SORT, formatSourceSort, parseSourceSort, sortSources, type SourceSort } from "@/lib/sourceSort";
 import type {
@@ -97,7 +98,8 @@ export default function Page() {
   const [liveParts, setLiveParts] = useState<LivePart[]>([]);
   const [liveCitations, setLiveCitations] = useState<MessageCitation[]>([]);
   const [pendingResearchId, setPendingResearchId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [studioBusy, setStudioBusy] = useState(false);
   const liveSeq = useRef(0);
   const resumeOnce = useRef("");
   const nextLiveId = useCallback(() => {
@@ -129,6 +131,10 @@ export default function Page() {
   const pendingMedia = useMemo(
     () => artifacts.some((artifact) => artifact.payload?.status === "pending"),
     [artifacts],
+  );
+  const locks = useMemo(
+    () => panelLocks({ chatBusy, studioBusy, addBusy, researchBusy }),
+    [chatBusy, studioBusy, addBusy, researchBusy],
   );
 
   const refresh = useCallback(async (id: string) => {
@@ -258,13 +264,13 @@ export default function Page() {
 
   async function onFiles(files: FileList | null) {
     if (!notebook || !files) return;
-    setBusy(true);
+    setAddBusy(true);
     for (const file of Array.from(files)) {
       await uploadFile(notebook.id, file);
     }
     await refresh(notebook.id);
     await syncNotebook(notebook.id);
-    setBusy(false);
+    setAddBusy(false);
   }
 
   const researchId = research?.id;
@@ -290,7 +296,7 @@ export default function Page() {
           setResearchError(t.searchTimeout);
           setResearchBusy(false);
           setPendingResearchId(null);
-          setBusy(false);
+          setChatBusy(false);
         }
         window.clearInterval(timer);
         return;
@@ -318,7 +324,7 @@ export default function Page() {
             setResearchBusy(false);
             setError(next.progress || t.searchTimeout);
             setPendingResearchId(null);
-            setBusy(false);
+            setChatBusy(false);
           }
         })
         .catch((err: Error) => {
@@ -414,14 +420,14 @@ export default function Page() {
       setLiveParts([]);
       setLiveCitations([]);
       setPendingResearchId(null);
-      setBusy(false);
+      setChatBusy(false);
     });
   }, [notebook, pendingResearchId, researchReadyId, nextLiveId, refresh, syncNotebook]);
 
   function onCancelChatResearch() {
     setPendingResearchId(null);
     setResearchBusy(false);
-    setBusy(false);
+    setChatBusy(false);
     if (notebook) {
       void refresh(notebook.id);
     }
@@ -457,10 +463,10 @@ export default function Page() {
     scrollChatToBottom();
     const frame = window.requestAnimationFrame(scrollChatToBottom);
     return () => window.cancelAnimationFrame(frame);
-  }, [messages, liveParts, busy]);
+  }, [messages, liveParts, chatBusy]);
 
   async function onSend(text?: string) {
-    if (!notebook || busy) return;
+    if (!notebook || chatBusy) return;
     const content = (text || chatInput).trim();
     if (!content) return;
     pinChatToBottom.current = true;
@@ -468,7 +474,7 @@ export default function Page() {
     setLiveParts([]);
     setLiveCitations([]);
     setError("");
-    setBusy(true);
+    setChatBusy(true);
     setMessages((prev) => [
       ...prev,
       { id: "tmp-user", role: "user", content, citations: [], tool_calls: [], model: null, created_at: new Date().toISOString() },
@@ -505,7 +511,7 @@ export default function Page() {
     await syncNotebook(notebook.id);
     setLiveParts([]);
     setLiveCitations([]);
-    setBusy(false);
+    setChatBusy(false);
   }
 
   const llmLanes = modalities?.llm || providers;
@@ -599,6 +605,7 @@ export default function Page() {
   }
 
   async function onRunSkill(skill: Skill) {
+    if (studioBusy) return;
     if (skill.id === "notes.create") {
       setNoteOpen(true);
       return;
@@ -619,7 +626,7 @@ export default function Page() {
   }
 
   async function onCreateStudio() {
-    if (!notebook || !studioSkill) return;
+    if (!notebook || !studioSkill || studioBusy) return;
     if (studioSourceIds.length === 0) {
       setStudioError(t.studioNoSources);
       return;
@@ -634,7 +641,7 @@ export default function Page() {
     };
     setStudioSkill(null);
     setStudioError("");
-    setBusy(true);
+    setStudioBusy(true);
     setPendingStudio({
       skillId: skill.id,
       title: skill.title,
@@ -650,7 +657,7 @@ export default function Page() {
       await syncNotebook(notebook.id);
     }
     setPendingStudio(null);
-    setBusy(false);
+    setStudioBusy(false);
   }
 
   if (!notebook) {
@@ -797,7 +804,7 @@ export default function Page() {
                 className="w-full rounded-full border border-line px-3 py-2 text-sm"
                 placeholder={t.searchWeb}
                 value={query}
-                disabled={researchBusy}
+                disabled={locks.sourceResearchDisabled}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
@@ -806,7 +813,7 @@ export default function Page() {
                   }
                 }}
               />
-              <button className="btn" disabled={researchBusy} onClick={onResearch}>
+              <button className="btn" disabled={locks.sourceResearchDisabled} onClick={onResearch}>
                 {researchBusy ? t.searching : t.searchStart}
               </button>
             </div>
@@ -815,7 +822,7 @@ export default function Page() {
               <select
                 className="chip bg-white"
                 value={mode}
-                disabled={researchBusy}
+                disabled={locks.sourceResearchDisabled}
                 onChange={(e) => setMode(e.target.value as "fast" | "deep")}
               >
                 <option value="fast">{t.fast}</option>
@@ -858,7 +865,7 @@ export default function Page() {
                       type="checkbox"
                       className="mt-1"
                       checked={selectedCites.includes(c.id)}
-                      disabled={researchBusy}
+                      disabled={locks.sourceResearchDisabled}
                       onChange={() =>
                         setSelectedCites((ids) => (ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id]))
                       }
@@ -879,7 +886,7 @@ export default function Page() {
                       type="checkbox"
                       className="mt-1"
                       checked={selectedCites.includes(c.id)}
-                      disabled={researchBusy}
+                      disabled={locks.sourceResearchDisabled}
                       onChange={() =>
                         setSelectedCites((ids) => (ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id]))
                       }
@@ -893,7 +900,7 @@ export default function Page() {
                     </span>
                   </label>
                 ))}
-                <button className="btn-primary" disabled={researchBusy} onClick={onImport}>
+                <button className="btn-primary" disabled={locks.sourceResearchDisabled} onClick={onImport}>
                   {researchBusy ? t.importing : t.import}
                 </button>
               </div>
@@ -1065,7 +1072,7 @@ export default function Page() {
                     </div>
                   </article>
                 ))}
-                {(busy || liveParts.length > 0) && (
+                {(chatBusy || liveParts.length > 0) && (
                   <article>
                     <div className="rounded-2xl bg-white px-4 py-3 text-sm">
                       {pendingResearchId && <p className="mb-2 text-xs text-neutral-500">{t.researchWait}</p>}
@@ -1083,7 +1090,7 @@ export default function Page() {
                           .filter((part): part is Extract<LivePart, { kind: "think" }> => part.kind === "think")
                           .map((part) => part.text)
                           .join("")}
-                        busy={busy}
+                        busy={chatBusy}
                       />
                       {liveParts
                         .filter((part): part is Extract<LivePart, { kind: "text" }> => part.kind === "text")
@@ -1129,7 +1136,7 @@ export default function Page() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    if (!busy) onSend();
+                    if (!locks.chatSendDisabled) onSend();
                   }
                 }}
               />
@@ -1145,7 +1152,7 @@ export default function Page() {
                       {t.cancelChat}
                     </button>
                   )}
-                  <button className="btn-primary" disabled={busy} onClick={() => onSend()}>
+                  <button className="btn-primary" disabled={locks.chatSendDisabled} onClick={() => onSend()}>
                     →
                   </button>
                 </div>
@@ -1165,7 +1172,7 @@ export default function Page() {
                 <StudioSkillButton
                   key={skill.id}
                   skill={skill}
-                  busy={busy}
+                  busy={locks.studioSkillsDisabled}
                   active={
                     pendingStudio?.skillId === skill.id ||
                     (!pendingStudio && artifacts[0]?.skill_id === skill.id)
@@ -1234,14 +1241,14 @@ export default function Page() {
       )}
 
       {addOpen && (
-        <Modal title={t.addSources} onClose={() => !addBusy && setAddOpen(false)}>
+        <Modal title={t.addSources} onClose={() => !locks.sourceAddDisabled && setAddOpen(false)}>
           {addError && <p className="mb-3 text-sm text-red-600">{addError}</p>}
           <label className="text-sm">{t.addUrl}</label>
           <input
             className="mt-1 w-full rounded border border-line px-2 py-1"
             value={urlValue}
             placeholder={t.urlPlaceholder}
-            disabled={addBusy}
+            disabled={locks.sourceAddDisabled}
             onChange={(e) => setUrlValue(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -1250,20 +1257,20 @@ export default function Page() {
               }
             }}
           />
-          <button className="btn-primary mt-2" disabled={addBusy} onClick={onAddUrl}>
+          <button className="btn-primary mt-2" disabled={locks.sourceAddDisabled} onClick={onAddUrl}>
             {addBusy ? t.addingUrl : t.addUrl}
           </button>
           <hr className="my-4" />
           <label className="text-sm">{t.pasteText}</label>
-          <input className="mt-1 w-full rounded border border-line px-2 py-1" value={textTitle} disabled={addBusy} onChange={(e) => setTextTitle(e.target.value)} />
-          <textarea className="mt-2 h-28 w-full rounded border border-line p-2" value={textBody} disabled={addBusy} onChange={(e) => setTextBody(e.target.value)} />
-          <button className="btn-primary mt-2" disabled={addBusy} onClick={onAddText}>
+          <input className="mt-1 w-full rounded border border-line px-2 py-1" value={textTitle} disabled={locks.sourceAddDisabled} onChange={(e) => setTextTitle(e.target.value)} />
+          <textarea className="mt-2 h-28 w-full rounded border border-line p-2" value={textBody} disabled={locks.sourceAddDisabled} onChange={(e) => setTextBody(e.target.value)} />
+          <button className="btn-primary mt-2" disabled={locks.sourceAddDisabled} onClick={onAddText}>
             {addBusy ? t.addingText : t.pasteText}
           </button>
           <hr className="my-4" />
           <label className="btn cursor-pointer">
             {t.upload}
-            <input type="file" className="hidden" multiple accept={t.uploadAccept} disabled={addBusy} onChange={(e) => onFiles(e.target.files).then(() => setAddOpen(false))} />
+            <input type="file" className="hidden" multiple accept={t.uploadAccept} disabled={locks.sourceAddDisabled} onChange={(e) => onFiles(e.target.files).then(() => setAddOpen(false))} />
           </label>
           <p className="mt-2 text-xs text-neutral-500">{t.uploadHint}</p>
         </Modal>
@@ -1278,9 +1285,9 @@ export default function Page() {
           format={mediaFormat}
           language={mediaLanguage}
           style={mediaStyle}
-          busy={busy}
+          busy={locks.studioModalLocked}
           error={studioError}
-          onClose={() => !busy && setStudioSkill(null)}
+          onClose={() => !locks.studioModalLocked && setStudioSkill(null)}
           onSourceIds={setStudioSourceIds}
           onPrompt={setStudioPrompt}
           onFormat={setMediaFormat}
