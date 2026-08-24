@@ -303,8 +303,19 @@ export function bindChatCitations<T extends { n: number; quote?: string; source_
   return out;
 }
 
+const SELF_INTRO = /^(?:Ich bin(?: Everlast Notebook,)? ein KI-System\.|Ich bin Everlast Notebook\.)\s*/i;
+
+export function stripSelfIntro(text: string): string {
+  let out = text || "";
+  while (true) {
+    const next = out.replace(SELF_INTRO, "");
+    if (next === out) return out.replace(/^\s+/, "");
+    out = next;
+  }
+}
+
 export function displayChatText(text: string): string {
-  return stripCitationDump(visibleChatText(text));
+  return stripSelfIntro(stripCitationDump(visibleChatText(text)));
 }
 
 export function stepsFromReasoning(raw: unknown[] | undefined): StepView[] {

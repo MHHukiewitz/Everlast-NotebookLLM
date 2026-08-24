@@ -8,10 +8,29 @@ from typing import Any
 
 from pptx import Presentation
 from pptx.dml.color import RGBColor
+from pptx.oxml.ns import qn
+from pptx.oxml.xmlchemy import OxmlElement
 from pptx.util import Inches, Pt
 
 from app.services.pdf import AI_MARK, markdown_to_pdf
+from app.services.studio.cites import (
+    CITE_MARK,
+    citations_for_export,
+    cite_title,
+    cite_url,
+    csv_quellen_rows,
+    expand_grouped_cite_marks,
+    finish_markdown,
+    finish_plain,
+    footnote_line,
+    html_cite_text,
+    json_references,
+    link_marks_in_svg,
+    mermaid_quellen,
+)
 from app.services.studio.png import infographic_png, mindmap_png
+
+HYPERLINK_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
 
 FORMATS: dict[str, tuple[str, ...]] = {
     "note": ("md", "txt", "pdf", "json"),
@@ -46,28 +65,35 @@ def allowed_formats(artifact_type: str) -> tuple[str, ...]:
     return FORMATS.get(artifact_type, ())
 
 
-def artifact_markdown(artifact_type: str, title: str, payload: dict[str, Any]) -> str:
+def artifact_markdown(
+    artifact_type: str,
+    title: str,
+    payload: dict[str, Any],
+    sources: list[Any] | None = None,
+) -> str:
     if artifact_type == "note":
-        return _note_md(title, payload)
-    if artifact_type == "report":
-        return _report_md(title, payload)
-    if artifact_type == "mindmap":
-        return _mindmap_md(title, payload)
-    if artifact_type == "quiz":
-        return _quiz_md(title, payload)
-    if artifact_type == "flashcards":
-        return _flashcards_md(title, payload)
-    if artifact_type == "table":
-        return _table_md(title, payload)
-    if artifact_type == "slides":
-        return _slides_md(title, payload)
-    if artifact_type == "infographic":
-        return _infographic_md(title, payload)
-    if artifact_type == "audio":
-        return _audio_md(title, payload)
-    if artifact_type == "video":
-        return _video_md(title, payload)
-    raise ValueError("Dieses Artefakt hat keinen Text.")
+        raw = _note_md(title, payload)
+    elif artifact_type == "report":
+        raw = _report_md(title, payload)
+    elif artifact_type == "mindmap":
+        raw = _mindmap_md(title, payload)
+    elif artifact_type == "quiz":
+        raw = _quiz_md(title, payload)
+    elif artifact_type == "flashcards":
+        raw = _flashcards_md(title, payload)
+    elif artifact_type == "table":
+        raw = _table_md(title, payload)
+    elif artifact_type == "slides":
+        raw = _slides_md(title, payload)
+    elif artifact_type == "infographic":
+        raw = _infographic_md(title, payload)
+    elif artifact_type == "audio":
+        raw = _audio_md(title, payload)
+    elif artifact_type == "video":
+        raw = _video_md(title, payload)
+    else:
+        raise ValueError("Dieses Artefakt hat keinen Text.")
+    return finish_markdown(raw, citations_for_export(payload, sources), AI_MARK)
 
 
 def safe_name(title: str) -> str:
@@ -79,13 +105,19 @@ def _text(value: str) -> bytes:
     return value.encode("utf-8")
 
 
-def _json_bytes(artifact_type: str, title: str, payload: dict[str, Any]) -> bytes:
+def _json_bytes(
+    artifact_type: str,
+    title: str,
+    payload: dict[str, Any],
+    citations: list[dict[str, Any]],
+) -> bytes:
     body = {
         "ai_generated": True,
         "notice": AI_MARK,
         "type": artifact_type,
         "title": title,
         "payload": payload,
+        "references": json_references(citations),
     }
     return json.dumps(body, ensure_ascii=False, indent=2).encode("utf-8")
 
@@ -216,7 +248,7 @@ def _slides_txt(title: str, payload: dict[str, Any]) -> str:
     return "\n".join(parts) + "\n"
 
 
-def _slides_html(title: str, payload: dict[str, Any]) -> str:
+def _slides_html(title: str, payload: dict[str, Any], citations: list[dict[str, Any]]) -> str:
     slides = payload.get("slides") or []
     sections: list[str] = []
     sections.append(
@@ -227,16 +259,35 @@ def _slides_html(title: str, payload: dict[str, Any]) -> str:
     )
     for index, slide in enumerate(slides, start=1):
         bullets = "".join(
-            f"<li>{html.escape(str(bullet))}</li>" for bullet in slide.get("bullets") or []
+            f"<li>{html_cite_text(str(bullet), citations)}</li>" for bullet in slide.get("bullets") or []
         )
         notes = slide.get("notes")
-        notes_html = f"<p class=\"notes\">{html.escape(str(notes))}</p>" if notes else ""
+        notes_html = f"<p class=\"notes\">{html_cite_text(str(notes), citations)}</p>" if notes else ""
         sections.append(
             "<section class=\"slide\">"
             f"<p class=\"count\">{index} / {len(slides)}</p>"
-            f"<h2>{html.escape(str(slide.get('heading') or ''))}</h2>"
+            f"<h2>{html_cite_text(str(slide.get('heading') or ''), citations)}</h2>"
             f"<ul>{bullets}</ul>"
             f"{notes_html}"
+            f"<p class=\"mark\">{html.escape(AI_MARK)}</p>"
+            "</section>"
+        )
+    if citations:
+        items_parts: list[str] = []
+        for cite in citations:
+            url = cite_url(cite)
+            title = html.escape(cite_title(cite))
+            if url:
+                items_parts.append(
+                    f"<li>[{cite['n']}] <a href=\"{html.escape(url, quote=True)}\">{title}</a></li>"
+                )
+            else:
+                items_parts.append(f"<li>[{cite['n']}] {title}</li>")
+        items = "".join(items_parts)
+        sections.append(
+            "<section class=\"slide\">"
+            "<h2>Quellen</h2>"
+            f"<ul class=\"sources\">{items}</ul>"
             f"<p class=\"mark\">{html.escape(AI_MARK)}</p>"
             "</section>"
         )
@@ -263,6 +314,8 @@ def _slides_html(title: str, payload: dict[str, Any]) -> str:
     .notes {{ color: #525252; font-size: 16px; margin-top: auto; }}
     .mark {{ color: #737373; font-size: 12px; margin-top: auto; }}
     .title-slide .mark {{ margin-top: 24px; }}
+    a {{ color: #1d4ed8; text-decoration: none; }}
+    .sources {{ font-size: 18px; }}
   </style>
 </head>
 <body>
@@ -287,44 +340,109 @@ def _slides_html(title: str, payload: dict[str, Any]) -> str:
 """
 
 
-def _pptx_box(slide: Any, left: Any, top: Any, width: Any, height: Any, text: str, size: int, bold: bool = False) -> None:
+def _clear_paragraph(paragraph: Any) -> None:
+    node = paragraph._p
+    for child in list(node):
+        if child.tag == qn("a:r"):
+            node.remove(child)
+
+
+def _set_run_hyperlink(run: Any, url: str) -> None:
+    r_id = run.part.relate_to(url, HYPERLINK_REL, is_external=True)
+    props = run._r.get_or_add_rPr()
+    link = OxmlElement("a:hlinkClick")
+    link.set(qn("r:id"), r_id)
+    props.append(link)
+
+
+def _pptx_cited_paragraph(
+    paragraph: Any, text: str, size: int, citations: list[dict[str, Any]], bold: bool = False
+) -> None:
+    _clear_paragraph(paragraph)
+    by_n = {int(item["n"]): item for item in citations}
+    expanded = expand_grouped_cite_marks(text)
+    last = 0
+
+    def add_run(chunk: str, url: str = "") -> None:
+        run = paragraph.add_run()
+        run.text = chunk
+        run.font.size = Pt(size)
+        run.font.bold = bold
+        if url:
+            run.font.color.rgb = RGBColor(29, 78, 216)
+            _set_run_hyperlink(run, url)
+            return
+        run.font.color.rgb = RGBColor(31, 31, 31)
+
+    for match in CITE_MARK.finditer(expanded):
+        if match.start() > last:
+            add_run(expanded[last : match.start()])
+        add_run(match.group(0), cite_url(by_n.get(int(match.group(1)))))
+        last = match.end()
+    if last < len(expanded):
+        add_run(expanded[last:])
+    if last == 0 and not expanded:
+        add_run("")
+
+
+def _pptx_box(
+    slide: Any,
+    left: Any,
+    top: Any,
+    width: Any,
+    height: Any,
+    text: str,
+    size: int,
+    citations: list[dict[str, Any]],
+    bold: bool = False,
+) -> None:
     box = slide.shapes.add_textbox(left, top, width, height)
     frame = box.text_frame
     frame.word_wrap = True
-    paragraph = frame.paragraphs[0]
-    paragraph.text = text
-    paragraph.font.size = Pt(size)
-    paragraph.font.bold = bold
-    paragraph.font.color.rgb = RGBColor(31, 31, 31)
+    _pptx_cited_paragraph(frame.paragraphs[0], text, size, citations, bold)
 
 
-def _slides_pptx(title: str, payload: dict[str, Any]) -> bytes:
+def _slides_pptx(title: str, payload: dict[str, Any], citations: list[dict[str, Any]]) -> bytes:
     deck = Presentation()
     deck.slide_width = Inches(13.333)
     deck.slide_height = Inches(7.5)
     blank = deck.slide_layouts[6]
     title_slide = deck.slides.add_slide(blank)
-    _pptx_box(title_slide, Inches(0.8), Inches(2.5), Inches(11.7), Inches(1.6), title, 40, True)
-    _pptx_box(title_slide, Inches(0.8), Inches(6.8), Inches(11.7), Inches(0.4), AI_MARK, 12)
+    _pptx_box(title_slide, Inches(0.8), Inches(2.5), Inches(11.7), Inches(1.6), title, 40, citations, True)
+    _pptx_box(title_slide, Inches(0.8), Inches(6.8), Inches(11.7), Inches(0.4), AI_MARK, 12, citations)
     for slide_data in payload.get("slides") or []:
         slide = deck.slides.add_slide(blank)
         heading = str(slide_data.get("heading") or "")
-        _pptx_box(slide, Inches(0.8), Inches(0.45), Inches(11.7), Inches(1.1), heading, 32, True)
+        _pptx_box(slide, Inches(0.8), Inches(0.45), Inches(11.7), Inches(1.1), heading, 32, citations, True)
         body = slide.shapes.add_textbox(Inches(0.8), Inches(1.7), Inches(11.7), Inches(4.6))
         frame = body.text_frame
         frame.word_wrap = True
         bullets = [str(bullet) for bullet in slide_data.get("bullets") or []]
         if bullets:
-            frame.paragraphs[0].text = bullets[0]
-            frame.paragraphs[0].font.size = Pt(20)
+            _pptx_cited_paragraph(frame.paragraphs[0], bullets[0], 20, citations)
             for bullet in bullets[1:]:
                 paragraph = frame.add_paragraph()
-                paragraph.text = bullet
-                paragraph.font.size = Pt(20)
                 paragraph.space_before = Pt(8)
-        notes = str(slide_data.get("notes") or "").strip()
+                _pptx_cited_paragraph(paragraph, bullet, 20, citations)
+        notes = expand_grouped_cite_marks(str(slide_data.get("notes") or "").strip())
         slide.notes_slide.notes_text_frame.text = f"{notes}\n\n{AI_MARK}".strip()
-        _pptx_box(slide, Inches(0.8), Inches(6.9), Inches(11.7), Inches(0.35), AI_MARK, 10)
+        _pptx_box(slide, Inches(0.8), Inches(6.9), Inches(11.7), Inches(0.35), AI_MARK, 10, citations)
+    if citations:
+        sources_slide = deck.slides.add_slide(blank)
+        _pptx_box(sources_slide, Inches(0.8), Inches(0.45), Inches(11.7), Inches(0.8), "Quellen", 32, citations, True)
+        listing = sources_slide.shapes.add_textbox(Inches(0.8), Inches(1.4), Inches(11.7), Inches(5.2))
+        frame = listing.text_frame
+        frame.word_wrap = True
+        for index, cite in enumerate(citations):
+            paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
+            if index:
+                paragraph.space_before = Pt(8)
+            line = f"[{cite['n']}] {cite_title(cite)}"
+            url = cite_url(cite)
+            if url:
+                line = f"{line} — {url}"
+            _pptx_cited_paragraph(paragraph, line, 18, citations)
+        _pptx_box(sources_slide, Inches(0.8), Inches(6.9), Inches(11.7), Inches(0.35), AI_MARK, 10, citations)
     buffer = io.BytesIO()
     deck.save(buffer)
     return buffer.getvalue()
@@ -474,7 +592,7 @@ def _chart_svg_blocks(charts: list[Any], top: int) -> tuple[str, int]:
     return "".join(blocks), y
 
 
-def infographic_svg(title: str, payload: dict[str, Any]) -> str:
+def infographic_svg(title: str, payload: dict[str, Any], citations: list[dict[str, Any]] | None = None) -> str:
     items = payload.get("items") or []
     fills = ("#eff6ff", "#f5f3ff", "#f0fdf4", "#fff7ed")
     chart_svg, y = _chart_svg_blocks(payload.get("charts") or [], 56)
@@ -500,7 +618,9 @@ def infographic_svg(title: str, payload: dict[str, Any]) -> str:
         cards.append((x, y, height, item, caption_lines, value_lines, detail_lines))
         if col == 1 or index == len(items) - 1:
             y += row_h + gap
-    total_h = max(y + 28, 160)
+    notes = citations or []
+    note_h = 14 * len(notes) if notes else 0
+    total_h = max(y + 28 + note_h, 160)
     blocks: list[str] = []
     for index, (x, top, height, item, caption_lines, value_lines, detail_lines) in enumerate(cards):
         fill = fills[index % len(fills)]
@@ -544,13 +664,28 @@ def infographic_svg(title: str, payload: dict[str, Any]) -> str:
             + "".join(value_svg)
             + "".join(detail_svg)
         )
+    note_svg: list[str] = []
+    for index, cite in enumerate(notes):
+        line_y = total_h - 12 - note_h + index * 14
+        line = _xml_escape(footnote_line(cite))
+        url = cite_url(cite)
+        text = f'<text x="16" y="{line_y}" font-size="9" fill="#525252">{line}</text>'
+        if url:
+            note_svg.append(f'<a href="{html.escape(url, quote=True)}">{text}</a>')
+        else:
+            note_svg.append(text)
+    body = link_marks_in_svg(
+        f'<text x="16" y="36" font-size="18" font-weight="600" fill="#1f1f1f">{_xml_escape(title)}</text>'
+        + chart_svg
+        + "".join(blocks),
+        notes,
+    )
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 {total_h}" width="640" height="{total_h}">'
         f'<rect width="640" height="{total_h}" fill="#ffffff"/>'
-        f'<text x="16" y="36" font-size="18" font-weight="600" fill="#1f1f1f">{_xml_escape(title)}</text>'
+        f"{body}"
         f'<text x="16" y="{total_h - 10}" font-size="10" fill="#737373">{_xml_escape(AI_MARK)}</text>'
-        + chart_svg
-        + "".join(blocks)
+        + "".join(note_svg)
         + "</svg>"
     )
 
@@ -567,71 +702,48 @@ def _table_csv(payload: dict[str, Any]) -> list[list[str]]:
 
 
 def export_artifact(
-    artifact_type: str, title: str, payload: dict[str, Any], fmt: str
+    artifact_type: str,
+    title: str,
+    payload: dict[str, Any],
+    fmt: str,
+    sources: list[Any] | None = None,
 ) -> tuple[bytes, str, str]:
     allowed = allowed_formats(artifact_type)
     if not allowed or fmt not in allowed:
         raise ValueError("Dieses Exportformat ist nicht verfügbar.")
+    citations = citations_for_export(payload, sources)
     if fmt == "json":
-        data = _json_bytes(artifact_type, title, payload)
-    elif artifact_type == "note" and fmt == "md":
-        data = _text(_note_md(title, payload))
+        data = _json_bytes(artifact_type, title, payload, citations)
+    elif fmt == "md":
+        data = _text(artifact_markdown(artifact_type, title, payload, sources))
+    elif fmt == "pdf":
+        data = markdown_to_pdf(title, artifact_markdown(artifact_type, title, payload, sources))
     elif artifact_type == "note" and fmt == "txt":
-        data = _text(f"{title}\n\n{payload.get('body') or ''}\n\n{AI_MARK}\n")
-    elif artifact_type == "note" and fmt == "pdf":
-        data = markdown_to_pdf(title, _note_md(title, payload))
-    elif artifact_type == "report" and fmt == "md":
-        data = _text(_report_md(title, payload))
-    elif artifact_type == "report" and fmt == "pdf":
-        data = markdown_to_pdf(title, _report_md(title, payload))
+        data = _text(finish_plain(f"{title}\n\n{payload.get('body') or ''}\n\n{AI_MARK}\n", citations, AI_MARK))
     elif artifact_type == "mindmap" and fmt == "png":
-        data = mindmap_png(title, payload)
+        data = mindmap_png(title, payload, citations)
     elif artifact_type == "mindmap" and fmt == "mmd":
-        data = _text(f"%% {AI_MARK}\n{payload.get('mermaid') or ''}\n")
-    elif artifact_type == "mindmap" and fmt == "pdf":
-        data = markdown_to_pdf(title, _mindmap_md(title, payload))
-    elif artifact_type == "quiz" and fmt == "md":
-        data = _text(_quiz_md(title, payload))
+        data = _text(mermaid_quellen(f"%% {AI_MARK}\n{payload.get('mermaid') or ''}\n", citations))
     elif artifact_type == "quiz" and fmt == "csv":
-        data = _csv_bytes(_quiz_csv(payload))
-    elif artifact_type == "quiz" and fmt == "pdf":
-        data = markdown_to_pdf(title, _quiz_md(title, payload))
-    elif artifact_type == "flashcards" and fmt == "md":
-        data = _text(_flashcards_md(title, payload))
+        data = _csv_bytes(_quiz_csv(payload) + csv_quellen_rows(citations, 2))
     elif artifact_type == "flashcards" and fmt == "csv":
-        data = _csv_bytes(_flashcards_csv(payload))
-    elif artifact_type == "flashcards" and fmt == "pdf":
-        data = markdown_to_pdf(title, _flashcards_md(title, payload))
-    elif artifact_type == "table" and fmt == "md":
-        data = _text(_table_md(title, payload))
+        data = _csv_bytes(_flashcards_csv(payload) + csv_quellen_rows(citations, 2))
     elif artifact_type == "table" and fmt == "csv":
-        data = _csv_bytes(_table_csv(payload))
-    elif artifact_type == "table" and fmt == "pdf":
-        data = markdown_to_pdf(title, _table_md(title, payload))
-    elif artifact_type == "slides" and fmt == "md":
-        data = _text(_slides_md(title, payload))
+        rows = _table_csv(payload)
+        width = max(len(rows[0]), 1) if rows else 1
+        data = _csv_bytes(rows + csv_quellen_rows(citations, width))
     elif artifact_type == "slides" and fmt == "pptx":
-        data = _slides_pptx(title, payload)
+        data = _slides_pptx(title, payload, citations)
     elif artifact_type == "slides" and fmt == "html":
-        data = _text(_slides_html(title, payload))
-    elif artifact_type == "slides" and fmt == "pdf":
-        data = markdown_to_pdf(title, _slides_md(title, payload))
+        data = _text(_slides_html(title, payload, citations))
     elif artifact_type == "slides" and fmt == "txt":
-        data = _text(_slides_txt(title, payload))
+        data = _text(finish_plain(_slides_txt(title, payload), citations, AI_MARK))
     elif artifact_type == "infographic" and fmt == "png":
-        data = infographic_png(title, payload)
+        data = infographic_png(title, payload, citations)
     elif artifact_type == "infographic" and fmt == "svg":
-        data = _text(infographic_svg(title, payload))
-    elif artifact_type == "infographic" and fmt == "md":
-        data = _text(_infographic_md(title, payload))
-    elif artifact_type == "infographic" and fmt == "pdf":
-        data = markdown_to_pdf(title, _infographic_md(title, payload))
-    elif artifact_type == "audio" and fmt == "md":
-        data = _text(_audio_md(title, payload))
+        data = _text(infographic_svg(title, payload, citations))
     elif artifact_type == "audio" and fmt == "mp3":
         data = _media_bytes(payload, "audio_path")
-    elif artifact_type == "video" and fmt == "md":
-        data = _text(_video_md(title, payload))
     elif artifact_type == "video" and fmt == "mp4":
         data = _media_bytes(payload, "video_path")
     else:

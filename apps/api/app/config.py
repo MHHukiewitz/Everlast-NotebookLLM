@@ -58,9 +58,14 @@ class Settings(BaseSettings):
     image_local_base_url: str = "http://127.0.0.1:8081"
     image_local_models: str = "flux"
     image_eu_models: str = ""
-    image_openrouter_models: str = "google/gemini-2.5-flash-image"
+    image_openrouter_models: str = (
+        "google/gemini-3-pro-image,"
+        "openai/gpt-image-2,"
+        "black-forest-labs/flux.2-pro,"
+        "bytedance-seed/seedream-5-0-pro"
+    )
     default_image_provider: str = "openrouter"
-    default_image_model: str = "google/gemini-2.5-flash-image"
+    default_image_model: str = "google/gemini-3-pro-image"
 
     searxng_url: str = "http://localhost:8080"
     langfuse_host: str = ""

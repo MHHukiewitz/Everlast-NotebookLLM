@@ -5,6 +5,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from app.services.pdf import AI_MARK
+from app.services.studio.cites import footnote_line
 from app.services.studio.mindmap import layout_mindmap, parse_mindmap
 
 FILLS = ((239, 246, 255), (245, 243, 255), (240, 253, 244), (255, 247, 237))
@@ -47,7 +48,27 @@ def _png_bytes(image: Image.Image) -> bytes:
     return buffer.getvalue()
 
 
-def infographic_png(title: str, payload: dict[str, Any]) -> bytes:
+def _footnote_space(citations: list[dict[str, Any]] | None, line_h: int = 14) -> int:
+    return line_h * len(citations) if citations else 0
+
+
+def _draw_footnotes(
+    canvas: ImageDraw.ImageDraw,
+    citations: list[dict[str, Any]] | None,
+    font: ImageFont.ImageFont,
+    top: int,
+    width: int,
+) -> None:
+    if not citations:
+        return
+    y = top
+    for cite in citations:
+        for line in _wrap(canvas, footnote_line(cite), font, width) or [footnote_line(cite)]:
+            canvas.text((24, y), line, font=font, fill=(82, 82, 82))
+            y += 14
+
+
+def infographic_png(title: str, payload: dict[str, Any], citations: list[dict[str, Any]] | None = None) -> bytes:
     probe = Image.new("RGB", (10, 10), (255, 255, 255))
     draw = ImageDraw.Draw(probe)
     title_font = _font(22)
@@ -94,7 +115,8 @@ def infographic_png(title: str, payload: dict[str, Any]) -> bytes:
         card_boxes.append((x, y, height, item))
         if col == 1 or index == len(items) - 1:
             y += row_h + GAP
-    total_h = max(y + 36, 200)
+    note_h = _footnote_space(citations)
+    total_h = max(y + 36 + note_h, 200)
     image = Image.new("RGB", (PAGE_W, total_h), (255, 255, 255))
     canvas = ImageDraw.Draw(image)
     canvas.text((24, 20), title, font=title_font, fill=(31, 31, 31))
@@ -127,6 +149,7 @@ def infographic_png(title: str, payload: dict[str, Any]) -> bytes:
             for line in _wrap(canvas, detail, body_font, col_w - 32):
                 canvas.text((x + 16, cursor), line, font=body_font, fill=(82, 82, 82))
                 cursor += 18
+    _draw_footnotes(canvas, citations, label_font, total_h - 22 - note_h, PAGE_W - 48)
     canvas.text((24, total_h - 22), AI_MARK, font=label_font, fill=(115, 115, 115))
     return _png_bytes(image)
 
@@ -186,7 +209,7 @@ def _draw_chart(
     return y + len(points) * 28 + 16
 
 
-def mindmap_png(title: str, payload: dict[str, Any]) -> bytes:
+def mindmap_png(title: str, payload: dict[str, Any], citations: list[dict[str, Any]] | None = None) -> bytes:
     root = parse_mindmap(str(payload.get("mermaid") or ""))
     title_font = _font(22)
     node_font = _font(15)
@@ -199,7 +222,12 @@ def mindmap_png(title: str, payload: dict[str, Any]) -> bytes:
 
     placed = layout_mindmap(root, PAGE_W - 48, measure, balanced=False)
     title_h = 48
-    image = Image.new("RGB", (max(placed.width + 24, 400), max(placed.height + title_h + 28, 200)), (255, 255, 255))
+    note_h = _footnote_space(citations)
+    image = Image.new(
+        "RGB",
+        (max(placed.width + 24, 400), max(placed.height + title_h + 28 + note_h, 200)),
+        (255, 255, 255),
+    )
     canvas = ImageDraw.Draw(image)
     canvas.text((24, 16), title, font=title_font, fill=(31, 31, 31))
     for edge in placed.edges:
@@ -218,5 +246,6 @@ def mindmap_png(title: str, payload: dict[str, Any]) -> bytes:
         for line in lines:
             canvas.text((x + 12, cursor), line, font=node_font, fill=(31, 31, 31))
             cursor += 18
+    _draw_footnotes(canvas, citations, _font(11), image.height - 22 - note_h, max(placed.width, 360))
     canvas.text((24, image.height - 22), AI_MARK, font=_font(11), fill=(115, 115, 115))
     return _png_bytes(image)

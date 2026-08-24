@@ -35,7 +35,7 @@ class Notebook(Base):
     tts_provider: Mapped[str] = mapped_column(String(32), default="local")
     tts_model: Mapped[str] = mapped_column(String(255), default="piper")
     image_provider: Mapped[str] = mapped_column(String(32), default="openrouter")
-    image_model: Mapped[str] = mapped_column(String(255), default="google/gemini-2.5-flash-image")
+    image_model: Mapped[str] = mapped_column(String(255), default="google/gemini-3-pro-image")
     eu_notice_accepted: Mapped[bool] = mapped_column(Boolean, default=False)
     openrouter_notice_accepted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

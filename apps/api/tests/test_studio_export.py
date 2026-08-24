@@ -2,6 +2,7 @@ import io
 import zipfile
 from pathlib import Path
 
+import markdown
 import pytest
 
 from app.services.pdf import AI_MARK
@@ -125,3 +126,104 @@ def test_table_csv_has_header() -> None:
     )
     assert media.startswith("text/csv")
     assert data.decode("utf-8").startswith("Schicht,Inhalt")
+
+
+CITED_REPORT = {
+    "body_md": "Ingest steht in [1] und lokal in [2].",
+    "citations": [
+        {"n": 1, "source_id": "s1", "source_title": "Alpha"},
+        {"n": 2, "source_id": "s2", "source_title": "Datei"},
+    ],
+}
+CITED_SOURCES = [
+    {"id": "s1", "title": "Alpha", "status": "ready", "origin_uri": "https://cite.example/alpha"},
+    {"id": "s2", "title": "Datei", "status": "ready", "origin_uri": None},
+]
+
+
+def test_report_markdown_links_sources() -> None:
+    text = artifact_markdown("report", "Bericht", CITED_REPORT, CITED_SOURCES)
+    assert "[[1]](https://cite.example/alpha)" in text
+    assert "## Quellen" in text
+    assert "[Alpha](https://cite.example/alpha)" in text
+    assert "[2] Datei" in text
+
+
+def test_report_pdf_embeds_source_url() -> None:
+    body = artifact_markdown("report", "Bericht", CITED_REPORT, CITED_SOURCES)
+    html_body = markdown.markdown(body, extensions=["tables", "fenced_code"])
+    assert 'href="https://cite.example/alpha"' in html_body
+    data, media, _filename = export_artifact(
+        "report", "Bericht", CITED_REPORT, "pdf", CITED_SOURCES
+    )
+    assert media == "application/pdf"
+    assert data.startswith(b"%PDF")
+
+
+def test_slides_html_links_sources() -> None:
+    payload = {
+        "slides": [{"heading": "Ingest [1]", "bullets": ["Holt PDF [1]"], "notes": "Siehe [1]"}],
+        "citations": [{"n": 1, "source_title": "Alpha", "url": "https://cite.example/alpha"}],
+    }
+    data, _media, _filename = export_artifact("slides", "Folien", payload, "html")
+    text = data.decode("utf-8")
+    assert 'href="https://cite.example/alpha"' in text
+    assert "Quellen" in text
+
+
+def test_table_csv_appends_source_urls() -> None:
+    payload = {
+        "columns": ["Schicht", "Inhalt"],
+        "rows": [["Ingest [1]", "PDF"]],
+        "citations": [{"n": 1, "source_title": "Alpha", "url": "https://cite.example/alpha"}],
+    }
+    data, _media, _filename = export_artifact("table", "Tabelle", payload, "csv")
+    text = data.decode("utf-8")
+    assert "Quellen" in text
+    assert "https://cite.example/alpha" in text
+
+
+def test_json_export_lists_references() -> None:
+    data, _media, _filename = export_artifact(
+        "report", "Bericht", CITED_REPORT, "json", CITED_SOURCES
+    )
+    body = data.decode("utf-8")
+    assert "cite.example/alpha" in body
+    assert '"references"' in body
+
+
+def test_note_txt_uses_url_footnotes() -> None:
+    payload = {
+        "body": "Fact [1].",
+        "citations": [{"n": 1, "source_title": "Alpha", "url": "https://cite.example/alpha"}],
+    }
+    data, _media, _filename = export_artifact("note", "Notiz", payload, "txt")
+    text = data.decode("utf-8")
+    assert "Fact [1]." in text
+    assert "[1] Alpha — https://cite.example/alpha" in text
+
+
+def test_infographic_svg_links_source_marks() -> None:
+    payload = {
+        "items": [{"label": "Zahl [1]", "value": "70", "detail": "Quelle [1]"}],
+        "citations": [{"n": 1, "source_title": "Alpha", "url": "https://cite.example/alpha"}],
+    }
+    data, _media, _filename = export_artifact("infographic", "Grafik", payload, "svg")
+    text = data.decode("utf-8")
+    assert 'href="https://cite.example/alpha"' in text
+    assert "cite.example/alpha" in text
+
+
+def test_slides_pptx_embeds_source_url() -> None:
+    payload = {
+        "slides": [{"heading": "Ingest [1]", "bullets": ["Holt PDF [1]"], "notes": ""}],
+        "citations": [{"n": 1, "source_title": "Alpha", "url": "https://cite.example/alpha"}],
+    }
+    data, _media, _filename = export_artifact("slides", "Folien", payload, "pptx")
+    xml = b"".join(
+        zipfile.ZipFile(io.BytesIO(data)).read(name)
+        for name in zipfile.ZipFile(io.BytesIO(data)).namelist()
+        if name.endswith(".xml") or name.endswith(".rels")
+    )
+    assert b"cite.example" in xml
+    assert b"Quellen" in xml

@@ -19,13 +19,14 @@ from app.services.skills import CHAT_TOOLS, REGISTRY, resolve_tool_name, run_ski
 from app.services.tracing import pack_prompt, record_generation, start_trace
 
 NO_ANSWER = "Die Quellen enthalten dazu keine klare Antwort."
-NO_SOURCES = "Ich bin ein KI-System. Füge Quellen hinzu oder stelle eine Frage."
+NO_SOURCES = "Füge Quellen hinzu oder stelle eine Frage."
 RESEARCH_WAIT = "Ich suche im Web nach weiteren Fakten…"
 SEARX_DOWN = "SearXNG ist nicht erreichbar. Starte den SearXNG-Container."
 TOOL_SKIPPED = "Nicht ausgeführt"
 MAX_TOOL_ROUNDS = 4
 
-SYSTEM = f"""Du bist Everlast Notebook, ein KI-System. Sage das klar.
+SYSTEM = f"""Du bist Everlast Notebook, ein KI-System.
+Stelle dich nicht vor. Beginne die Antwort nicht mit „Ich bin Everlast Notebook“ oder „Ich bin ein KI-System“.
 Antworte auf Deutsch in normaler Sprache.
 Beantworte zuerst die Frage. Schreibe nur wenige Sätze.
 Schreibe keine JSON-Werkzeugaufrufe in die Antwort.
@@ -42,7 +43,8 @@ Lege, wähle oder lösche Quellen nur über Werkzeuge.
 Zum Löschen nutze sources_delete_matching mit einem kurzen Suchbegriff aus Titel oder URL.
 """
 
-RESUME_SYSTEM = f"""Du bist Everlast Notebook, ein KI-System. Sage das klar.
+RESUME_SYSTEM = f"""Du bist Everlast Notebook, ein KI-System.
+Stelle dich nicht vor. Beginne die Antwort nicht mit „Ich bin Everlast Notebook“ oder „Ich bin ein KI-System“.
 Antworte auf Deutsch in normaler Sprache.
 Beantworte zuerst die Frage. Schreibe nur wenige Sätze.
 Nutze nur den Recherche-Scratch im Kontext.
@@ -63,6 +65,10 @@ _TOOL_CALL_OPEN = re.compile(r"<tool_call>", re.I)
 _FENCE_OPEN = re.compile(r"```(?:json)?[ \t]*\n", re.I)
 _JSON_FENCE_OPEN = re.compile(r"```json[ \t]*\n", re.I)
 _BARE_FENCE_OPEN = re.compile(r"```[ \t]*\n")
+_SELF_INTRO = re.compile(
+    r"^(?:Ich bin(?: Everlast Notebook,)? ein KI-System\.|Ich bin Everlast Notebook\.)\s*",
+    re.I,
+)
 _CITE_MARK = re.compile(r"\[(\d+)\]")
 _GROUPED_CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)+)\]")
 _DUMP_LINE = re.compile(r"^\s*(?:\[\d+\]\s*)+$")
@@ -464,6 +470,15 @@ def split_incomplete_tool(text: str) -> tuple[str, str]:
     return text[:hold_at], text[hold_at:]
 
 
+def strip_self_intro(text: str) -> str:
+    out = text or ""
+    while True:
+        next_text = _SELF_INTRO.sub("", out, count=1)
+        if next_text == out:
+            return out.lstrip()
+        out = next_text
+
+
 def expand_grouped_cite_marks(text: str) -> str:
     def _expand(match: re.Match[str]) -> str:
         return "".join(f"[{part.strip()}]" for part in match.group(1).split(",") if part.strip())
@@ -486,7 +501,7 @@ def used_citations(text: str, citation_map: list[dict[str, Any]]) -> list[dict[s
 
 
 def finalize_answer(text: str, citation_map: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
-    cleaned = strip_citation_dump(text)
+    cleaned = strip_self_intro(strip_citation_dump(text))
     used = used_citations(cleaned, citation_map)
     return cleaned, used or citation_map
 

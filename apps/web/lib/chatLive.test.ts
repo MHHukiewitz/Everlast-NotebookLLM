@@ -4,6 +4,7 @@ import {
   bindChatCitations,
   citationMarks,
   displayChatText,
+  stripSelfIntro,
   stepsFromReasoning,
   stripCitationDump,
   usedCitations,
@@ -73,6 +74,14 @@ assert.equal(
   "Everlast berät den Mittelstand.\n```python\nprint(1)",
 );
 assert.equal(displayChatText("Everlast berät den Mittelstand."), "Everlast berät den Mittelstand.");
+assert.equal(
+  stripSelfIntro("Ich bin Everlast Notebook, ein KI-System.\n\nEverlast berät Unternehmen [1]."),
+  "Everlast berät Unternehmen [1].",
+);
+assert.equal(
+  displayChatText("Ich bin Everlast Notebook, ein KI-System. Die Firma sitzt in Berlin."),
+  "Die Firma sitzt in Berlin.",
+);
 assert.equal(
   visibleChatText('```json\n{"name": "notes_create", "arguments": {}}\n``` Rest'),
   "Rest",

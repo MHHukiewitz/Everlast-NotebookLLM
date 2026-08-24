@@ -10,6 +10,26 @@ from app.services.piper_tts import piper_ready
 Kind = Literal["tts", "image"]
 ENGLISH_ONLY_TTS_MODELS = frozenset({"kokoro"})
 LOCAL_GERMAN_TTS = "piper"
+WEAK_IMAGE_MODELS = frozenset(
+    {
+        "google/gemini-2.5-flash-image",
+        "google/gemini-3.1-flash-image",
+    }
+)
+DEFAULT_IMAGE_OPENROUTER = [
+    "google/gemini-3-pro-image",
+    "openai/gpt-image-2",
+    "black-forest-labs/flux.2-pro",
+    "bytedance-seed/seedream-5-0-pro",
+]
+_IMAGE_LABELS = {
+    "google/gemini-3-pro-image": "Gemini 3 Pro Image",
+    "google/gemini-2.5-flash-image": "Gemini 2.5 Flash Image",
+    "google/gemini-3.1-flash-image": "Gemini 3.1 Flash Image",
+    "openai/gpt-image-2": "GPT Image 2",
+    "black-forest-labs/flux.2-pro": "FLUX.2 Pro",
+    "bytedance-seed/seedream-5-0-pro": "Seedream 5.0 Pro",
+}
 
 
 def _csv(value: str) -> list[str]:
@@ -17,7 +37,16 @@ def _csv(value: str) -> list[str]:
 
 
 def _label(model_id: str) -> str:
-    return model_id.split("/")[-1]
+    return _IMAGE_LABELS.get(model_id, model_id.split("/")[-1])
+
+
+def image_openrouter_models() -> list[str]:
+    configured = _csv(settings.image_openrouter_models)
+    if not configured:
+        return list(DEFAULT_IMAGE_OPENROUTER)
+    if all(item in WEAK_IMAGE_MODELS for item in configured):
+        return [*DEFAULT_IMAGE_OPENROUTER, *[item for item in configured if item not in DEFAULT_IMAGE_OPENROUTER]]
+    return configured
 
 
 def openai_v1(url: str) -> str:
@@ -101,7 +130,7 @@ def list_modalities() -> ModalitiesOut:
             label="OpenRouter",
             available=or_up,
             notice=or_notice,
-            models=_lane_models(_csv(settings.image_openrouter_models), "openrouter"),
+            models=_lane_models(image_openrouter_models(), "openrouter"),
         ),
     ]
     return ModalitiesOut(llm=model_router.list_providers(), tts=tts, image=image)
@@ -126,13 +155,17 @@ def _allowlist(kind: Kind, provider: str) -> list[str]:
     if kind == "image" and provider == "eu":
         return _csv(settings.image_eu_models)
     if kind == "image" and provider == "openrouter":
-        return _csv(settings.image_openrouter_models)
+        return image_openrouter_models()
     return []
 
 
 def resolve_media(kind: Kind, provider: str, model_id: str) -> dict[str, Any]:
     allow = _allowlist(kind, provider)
     chosen = model_id or (allow[0] if allow else "")
+    if kind == "image" and provider == "openrouter" and chosen in WEAK_IMAGE_MODELS:
+        upgrade = next((item for item in DEFAULT_IMAGE_OPENROUTER if item in allow), "")
+        if upgrade:
+            chosen = upgrade
     if allow and chosen and chosen not in allow:
         label = "Sprachmodell" if kind == "tts" else "Bildmodell"
         raise ValueError(f"Dieses {label} steht auf der Allowlist nicht.")

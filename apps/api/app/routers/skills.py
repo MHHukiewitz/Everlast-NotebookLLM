@@ -61,8 +61,11 @@ async def export_artifact_file(
     artifact = await session.get(Artifact, artifact_id)
     if artifact is None or artifact.notebook_id != notebook.id:
         raise HTTPException(404, "Artefakt nicht gefunden")
+    sources = list(
+        (await session.execute(select(Source).where(Source.notebook_id == notebook.id))).scalars()
+    )
     data, media_type, filename = export_artifact(
-        artifact.type, artifact.title, artifact.payload or {}, fmt
+        artifact.type, artifact.title, artifact.payload or {}, fmt, sources
     )
     return Response(
         content=data,
@@ -100,7 +103,10 @@ async def artifact_as_source(
     artifact = await session.get(Artifact, artifact_id)
     if artifact is None or artifact.notebook_id != notebook.id:
         raise HTTPException(404, "Artefakt nicht gefunden")
-    text = artifact_markdown(artifact.type, artifact.title, artifact.payload or {})
+    sources = list(
+        (await session.execute(select(Source).where(Source.notebook_id == notebook.id))).scalars()
+    )
+    text = artifact_markdown(artifact.type, artifact.title, artifact.payload or {}, sources)
     if not text.strip():
         raise ValueError("Das Artefakt ist leer.")
     source = Source(

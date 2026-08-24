@@ -267,7 +267,7 @@ def generate_image(notebook: Notebook, prompt: str) -> bytes | None:
     if not image_ready(notebook):
         return None
     url, payload, headers = image_request(notebook.image_provider, notebook.image_model, prompt)
-    with httpx.Client(timeout=120.0) as client:
+    with httpx.Client(timeout=180.0) as client:
         response = client.post(url, headers=headers, json=payload)
     if response.status_code >= 400:
         if notebook.image_provider == "openrouter":

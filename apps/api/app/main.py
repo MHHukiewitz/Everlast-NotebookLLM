@@ -28,8 +28,17 @@ async def lifespan(_: FastAPI):
         await conn.execute(text("ALTER TABLE notebooks ADD COLUMN IF NOT EXISTS tts_model VARCHAR(255) DEFAULT 'piper'"))
         await conn.execute(text("ALTER TABLE notebooks ALTER COLUMN tts_provider SET DEFAULT 'local'"))
         await conn.execute(text("ALTER TABLE notebooks ALTER COLUMN tts_model SET DEFAULT 'piper'"))
-        await conn.execute(text("ALTER TABLE notebooks ADD COLUMN IF NOT EXISTS image_provider VARCHAR(32) DEFAULT 'local'"))
-        await conn.execute(text("ALTER TABLE notebooks ADD COLUMN IF NOT EXISTS image_model VARCHAR(255) DEFAULT 'flux'"))
+        await conn.execute(text("ALTER TABLE notebooks ADD COLUMN IF NOT EXISTS image_provider VARCHAR(32) DEFAULT 'openrouter'"))
+        await conn.execute(text("ALTER TABLE notebooks ADD COLUMN IF NOT EXISTS image_model VARCHAR(255) DEFAULT 'google/gemini-3-pro-image'"))
+        await conn.execute(text("ALTER TABLE notebooks ALTER COLUMN image_provider SET DEFAULT 'openrouter'"))
+        await conn.execute(text("ALTER TABLE notebooks ALTER COLUMN image_model SET DEFAULT 'google/gemini-3-pro-image'"))
+        await conn.execute(
+            text(
+                "UPDATE notebooks SET image_model = 'google/gemini-3-pro-image' "
+                "WHERE image_provider = 'openrouter' AND image_model IN "
+                "('google/gemini-2.5-flash-image', 'google/gemini-3.1-flash-image', 'flux')"
+            )
+        )
     async with SessionLocal() as session:
         await seed_demo_user(session)
         if settings.embedding_backend == "ollama":

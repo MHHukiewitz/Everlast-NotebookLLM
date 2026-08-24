@@ -27,6 +27,7 @@ from app.services.chat_agent import (
     split_incomplete_tool,
     step_event,
     strip_citation_dump,
+    strip_self_intro,
     thinking_text,
     delta_stream_parts,
     join_system,
@@ -45,6 +46,8 @@ def test_system_uses_exact_no_answer() -> None:
     assert "Hybrid-Search" in SYSTEM
     assert "Langfuse" in SYSTEM
     assert "Schreibe dann keinen weiteren Text" not in SYSTEM
+    assert "Sage das klar" not in SYSTEM
+    assert "Stelle dich nicht vor" in SYSTEM
 
 
 def test_research_query_detects_german_and_english() -> None:
@@ -219,6 +222,10 @@ def test_citation_dump_and_used_filter() -> None:
     text, used = finalize_answer("Berlin [7, 5].", cites)
     assert text == "Berlin [7][5]."
     assert [item["n"] for item in used] == [5, 7]
+    assert strip_self_intro("Ich bin Everlast Notebook, ein KI-System.\n\nBerlin [1].") == "Berlin [1]."
+    intro, intro_used = finalize_answer("Ich bin Everlast Notebook, ein KI-System. Berlin [1].", cites)
+    assert intro == "Berlin [1]."
+    assert [item["n"] for item in intro_used] == [1]
 
 
 def test_plain_text_strips_control_chars() -> None:

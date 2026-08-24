@@ -1,3 +1,5 @@
+from html import escape
+
 import markdown
 from weasyprint import HTML
 
@@ -12,10 +14,12 @@ def markdown_to_pdf(title: str, body: str) -> bytes:
   <meta charset="utf-8" />
   <meta name="generator" content="Everlast Notebook" />
   <meta name="X-AI-Generated" content="true" />
-  <title>{title}</title>
+  <title>{escape(title)}</title>
   <style>
     body {{ font-family: DejaVu Sans, sans-serif; font-size: 12px; line-height: 1.45; padding: 32px; }}
     h1 {{ font-size: 20px; }}
+    h2 {{ font-size: 14px; margin-top: 20px; }}
+    a {{ color: #1d4ed8; text-decoration: none; }}
     footer {{ margin-top: 32px; color: #555; font-size: 10px; border-top: 1px solid #ddd; padding-top: 8px; }}
   </style>
 </head>
