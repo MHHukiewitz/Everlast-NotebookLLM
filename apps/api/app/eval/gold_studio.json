@@ -1,0 +1,54 @@
+[
+  {
+    "id": "studio_mindmap",
+    "task": "studio_mindmap",
+    "skill_id": "studio.mindmap",
+    "question": "Erzeuge eine Mindmap aus der Gold-Quelle.",
+    "expected_answer": "Die Mindmap nennt Ingest, Embeddings, Retrieval, Modell, Permissions, Monitoring und Agenten. Sie erfindet keine Umsätze oder Adressen.",
+    "keywords": ["Ingest", "Embeddings", "Retrieval", "Modell", "Permissions", "Monitoring"],
+    "forbidden": ["Jahresumsatz", "Privatadresse", "Geschäftsführung", "everlaw.com"],
+    "must_refuse": false
+  },
+  {
+    "id": "studio_report",
+    "task": "studio_report",
+    "skill_id": "studio.report",
+    "question": "Schreibe einen Studio-Bericht aus der Gold-Quelle.",
+    "expected_answer": "Der Bericht nennt Ingest, Embeddings, Retrieval, Modell, Permissions, Monitoring und Agenten. Er erwähnt BM25, Ollama oder Langfuse. Er ist als KI-generiert markiert. Er erfindet keine Umsätze oder Adressen.",
+    "keywords": ["Ingest", "Embeddings", "Retrieval", "KI-generiert"],
+    "forbidden": ["Jahresumsatz", "Privatadresse", "Geschäftsführung", "everlaw.com"],
+    "must_refuse": false
+  },
+  {
+    "id": "studio_quiz",
+    "task": "studio_quiz",
+    "skill_id": "studio.quiz",
+    "question": "Erzeuge ein Quiz aus der Gold-Quelle.",
+    "expected_answer": "Das Quiz hat vier bis sechs Fragen. Die Fragen und Antworten stehen in der Gold-Quelle. Es erfindet keine Umsätze oder Adressen.",
+    "keywords": ["Ingest", "Embeddings", "Ollama"],
+    "forbidden": ["Jahresumsatz", "Privatadresse", "Geschäftsführung", "everlaw.com"],
+    "min_questions": 4,
+    "must_refuse": false
+  },
+  {
+    "id": "studio_flashcards",
+    "task": "studio_flashcards",
+    "skill_id": "studio.flashcards",
+    "question": "Erzeuge Karteikarten aus der Gold-Quelle.",
+    "expected_answer": "Die Karten nennen Ingest, Embeddings, Retrieval und Modell. Es gibt mindestens sechs Karten. Sie erfinden keine Umsätze oder Adressen.",
+    "keywords": ["Ingest", "Embeddings", "Retrieval", "Modell"],
+    "forbidden": ["Jahresumsatz", "Privatadresse", "Geschäftsführung", "everlaw.com"],
+    "min_cards": 6,
+    "must_refuse": false
+  },
+  {
+    "id": "studio_table",
+    "task": "studio_table",
+    "skill_id": "studio.table",
+    "question": "Erzeuge eine Datentabelle aus der Gold-Quelle.",
+    "expected_answer": "Die Tabelle hat Spalten wie Schicht und Inhalt. Sie nennt Ingest, Embeddings und Retrieval. Sie erfindet keine Umsätze oder Adressen.",
+    "keywords": ["Ingest", "Embeddings", "Retrieval"],
+    "forbidden": ["Jahresumsatz", "Privatadresse", "Geschäftsführung", "everlaw.com"],
+    "must_refuse": false
+  }
+]

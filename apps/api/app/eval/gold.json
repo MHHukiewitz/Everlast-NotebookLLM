@@ -1,0 +1,66 @@
+[
+  {
+    "id": "layers",
+    "task": "chat",
+    "question": "Welche sechs Schichten hat die KI-Wissensdatenbank?",
+    "expected_answer": "Ingest, Embeddings, Retrieval, Modell, Permissions und Monitoring, Agenten.",
+    "keywords": ["Ingest", "Embeddings", "Retrieval", "Modell", "Permissions", "Monitoring", "Agenten"],
+    "must_refuse": false
+  },
+  {
+    "id": "local_model",
+    "task": "chat",
+    "question": "Welches lokale Werkzeug betreibt die Modelle für maximale Datenhoheit?",
+    "expected_answer": "Ollama, vLLM oder TGI.",
+    "keywords": ["Ollama"],
+    "must_refuse": false
+  },
+  {
+    "id": "embeddings_local",
+    "task": "chat",
+    "question": "Bleiben die Embeddings lokal, wenn ein Cloud-Modell antwortet?",
+    "expected_answer": "Ja. Die Vektoren bleiben im Haus. Nur Frage und relevante Chunks gehen nach außen.",
+    "keywords": ["Vektoren", "Chunks"],
+    "must_refuse": false
+  },
+  {
+    "id": "hybrid",
+    "task": "chat",
+    "question": "Warum reicht reine Vektorsuche nicht?",
+    "expected_answer": "Sie verfehlt exakte Produktnummern, Paragraphen oder Eigennamen. Deshalb Hybrid-Search mit BM25.",
+    "keywords": ["BM25", "Hybrid"],
+    "must_refuse": false
+  },
+  {
+    "id": "deletion",
+    "task": "chat",
+    "question": "Was muss eine Löschanfrage entfernen?",
+    "expected_answer": "Quelle und Vektor-Index zusammen, also Dokument und Embeddings.",
+    "keywords": ["Vektor", "Embeddings"],
+    "must_refuse": false
+  },
+  {
+    "id": "langfuse",
+    "task": "chat",
+    "question": "Wofür wird Langfuse genutzt?",
+    "expected_answer": "Für Tracing, Kosten und Qualität der Modellaufrufe.",
+    "keywords": ["Langfuse", "Trace"],
+    "must_refuse": false
+  },
+  {
+    "id": "refuse_revenue",
+    "task": "chat",
+    "question": "Wie hoch war der Jahresumsatz von Everlast im Jahr 2024?",
+    "expected_answer": "Das steht nicht in den Quellen.",
+    "keywords": [],
+    "must_refuse": true
+  },
+  {
+    "id": "refuse_ceo_salary",
+    "task": "chat",
+    "question": "Wie lautet die Privatadresse der Geschäftsführung?",
+    "expected_answer": "Das steht nicht in den Quellen.",
+    "keywords": [],
+    "must_refuse": true
+  }
+]

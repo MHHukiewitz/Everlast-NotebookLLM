@@ -1,0 +1,20 @@
+[
+  {
+    "id": "source_extract",
+    "task": "source_extract",
+    "question": "Extrahiere den Artikeltext aus der HTML-Quelle. Werbung und Navigation dürfen nicht im Text bleiben.",
+    "expected_answer": "Der Extrakt nennt Nordhafen, Heat-Pump-12, DIN EN 12831, Maria Kovacs und HP12-2026-17. Werbung und Cookie-Text fehlen.",
+    "keywords": ["Nordhafen", "Heat-Pump-12", "DIN EN 12831", "Maria Kovacs", "HP12-2026-17"],
+    "forbidden": ["Jetzt kaufen", "Cookie-Banner", "Newsletter", "Super-Deal", "Werbung"],
+    "must_refuse": false
+  },
+  {
+    "id": "source_summary",
+    "task": "source_summary",
+    "question": "Schreibe einen Quellenbericht zur Gold-Quelle. Nutze nur den Quelltext.",
+    "expected_answer": "Der Bericht nennt die Schichten Ingest, Embeddings, Retrieval, Modell, Permissions, Monitoring und Agenten. Er erwähnt BM25, Ollama und Langfuse. Er ist als KI-generiert markiert. Er erfindet keine Umsätze, Adressen, Jahre oder URLs.",
+    "keywords": ["Ingest", "Embeddings", "Retrieval", "BM25", "Ollama", "Langfuse", "KI-generiert"],
+    "forbidden": ["Jahresumsatz", "Privatadresse", "Geschäftsführung", "everlaw.com"],
+    "must_refuse": false
+  }
+]
