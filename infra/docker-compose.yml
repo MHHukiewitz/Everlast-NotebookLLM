@@ -49,7 +49,17 @@ services:
       NEXTAUTH_URL: http://localhost:3001
       NEXTAUTH_SECRET: everlast-notebook-demo-nextauth
       SALT: everlast-notebook-demo-salt
+      ENCRYPTION_KEY: c07b83f3bff98e9c79f92337662f86809fa3e3b35fe925e2722c61ddc7b4b28e
       TELEMETRY_ENABLED: "false"
+      LANGFUSE_INIT_ORG_ID: everlast
+      LANGFUSE_INIT_ORG_NAME: Everlast
+      LANGFUSE_INIT_PROJECT_ID: notebook
+      LANGFUSE_INIT_PROJECT_NAME: Everlast Notebook
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-local-demo
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-local-demo
+      LANGFUSE_INIT_USER_EMAIL: demo@everlastconsulting.de
+      LANGFUSE_INIT_USER_NAME: Demo
+      LANGFUSE_INIT_USER_PASSWORD: demo1234
 
   api:
     build:
