@@ -1,0 +1,17 @@
+notebook.hukiewitz.com {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy api:8000 {
+			flush_interval -1
+			transport http {
+				read_timeout 1h
+				write_timeout 1h
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

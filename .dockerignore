@@ -1,0 +1,12 @@
+.git
+.venv
+venv
+node_modules
+.next
+data
+**/.pytest_cache
+**/__pycache__
+**/*.pyc
+apps/web/tsconfig.tsbuildinfo
+.env
+.env.local
