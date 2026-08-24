@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 from sqlalchemy import select
@@ -5,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Artifact, AuditEvent, GenerationLog, Message, Notebook, ResearchJob, SkillRun, Source, User
+from app.services.autoname import UNTITLED_TITLE
 from app.services.auth import is_demo_email, normalize_email
 from app.services.passwords import hash_password, verify_password
 from app.services.tracing import delete_user_traces
@@ -18,6 +20,9 @@ async def erase_notebook(session: AsyncSession, notebook: Notebook) -> None:
             if path.exists():
                 path.unlink()
         await session.delete(source)
+    folder = Path(settings.file_store) / str(notebook.id)
+    if folder.exists():
+        shutil.rmtree(folder)
     for model in (GenerationLog, Message, Artifact, ResearchJob, SkillRun, AuditEvent):
         rows = (await session.execute(select(model).where(model.notebook_id == notebook.id))).scalars()
         for row in rows:
@@ -28,7 +33,7 @@ async def erase_notebook(session: AsyncSession, notebook: Notebook) -> None:
 async def create_empty_notebook(session: AsyncSession, tenant_id: str) -> Notebook:
     notebook = Notebook(
         tenant_id=tenant_id,
-        title="Unbenanntes Notebook",
+        title=UNTITLED_TITLE,
         provider=settings.default_provider,
         model_id=settings.default_model,
     )

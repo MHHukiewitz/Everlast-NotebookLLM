@@ -9,6 +9,7 @@ from app.db import get_session
 from app.deps import owned_notebook
 from app.models import AuditEvent, Citation, Notebook, Source
 from app.schemas import AddTextIn, AddUrlIn, SelectSourceIn, SourceDetail, SourceOut
+from app.services.autoname import maybe_autoname
 from app.services.ingest import (
     finalize_source,
     ingest_text,
@@ -65,6 +66,7 @@ async def add_url(
     session.add(source)
     await session.flush()
     await ingest_url(session, source, body.url, use_model_summary=False)
+    maybe_autoname(notebook, source.title or body.url)
     session.add(AuditEvent(tenant_id=notebook.tenant_id, notebook_id=notebook.id, action="source.add_url", detail={"url": body.url}))
     await session.commit()
     background_tasks.add_task(refresh_model_summary, source.id)
@@ -88,6 +90,8 @@ async def add_text(
     session.add(source)
     await session.flush()
     await ingest_text(session, source, body.text, use_model_summary=False)
+    if maybe_autoname(notebook, source.title or body.text):
+        await session.commit()
     background_tasks.add_task(refresh_model_summary, source.id)
     return source
 
@@ -115,6 +119,8 @@ async def add_file(
     session.add(source)
     await session.flush()
     await finalize_source(session, source, text, use_model_summary=False)
+    if maybe_autoname(notebook, source.title or filename):
+        await session.commit()
     background_tasks.add_task(refresh_model_summary, source.id)
     return source
 

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Citation, Notebook, ResearchJob, Source
+from app.services.autoname import maybe_autoname
 from app.services.connectors import router
 from app.services.ingest import favicon_from_html, favicon_from_url, finalize_source
 from app.services.tracing import pack_prompt, record_generation, start_trace
@@ -208,6 +209,24 @@ async def run_deep_research(session: AsyncSession, job: ResearchJob) -> None:
     await session.commit()
 
 
+async def enqueue_research(
+    session: AsyncSession, notebook: Notebook, query: str, mode: str
+) -> ResearchJob:
+    job = ResearchJob(
+        tenant_id=notebook.tenant_id,
+        notebook_id=notebook.id,
+        query=query.strip(),
+        mode=mode,
+        status="queued",
+        progress="Suche läuft",
+    )
+    maybe_autoname(notebook, job.query)
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
 async def run_research_job(session: AsyncSession, job_id: uuid.UUID) -> None:
     job = await session.get(ResearchJob, job_id)
     if job is None:
@@ -306,5 +325,8 @@ async def import_research(
         )
         created.append(source)
     job.status = "imported"
+    notebook = await session.get(Notebook, job.notebook_id)
+    if notebook is not None:
+        maybe_autoname(notebook, job.query)
     await session.commit()
     return created

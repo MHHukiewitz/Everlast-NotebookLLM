@@ -8,7 +8,7 @@ from app.db import get_session
 from app.deps import owned_notebook
 from app.models import Citation, Notebook, ResearchJob
 from app.schemas import ResearchImportIn, ResearchJobOut, ResearchStartIn, SourceOut
-from app.services.research import import_research, run_research_job_isolated, searx_reachable
+from app.services.research import enqueue_research, import_research, run_research_job_isolated, searx_reachable
 
 api = APIRouter(prefix="/api/notebooks/{notebook_id}")
 
@@ -25,17 +25,7 @@ async def start_research(
         raise HTTPException(400, "Gib einen Suchbegriff ein.")
     if not searx_reachable():
         raise HTTPException(400, "SearXNG ist nicht erreichbar. Starte den SearXNG-Container.")
-    job = ResearchJob(
-        tenant_id=notebook.tenant_id,
-        notebook_id=notebook.id,
-        query=query,
-        mode=body.mode,
-        status="queued",
-        progress="Suche läuft",
-    )
-    session.add(job)
-    await session.commit()
-    await session.refresh(job)
+    job = await enqueue_research(session, notebook, query, body.mode)
     background_tasks.add_task(run_research_job_isolated, job.id)
     return ResearchJobOut.model_validate(job).model_copy(update={"candidates": []})
 
