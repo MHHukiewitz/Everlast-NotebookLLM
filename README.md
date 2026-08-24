@@ -31,7 +31,7 @@ Send `DEMO_EMAIL` and `DEMO_PASSWORD` to the interviewer. Do not put the passwor
 Pull a local model once Ollama is up:
 
 ```bash
-docker exec -it infra-ollama-1 ollama pull llama3.2
+docker exec -it infra-ollama-1 ollama pull qwen2.5:7b
 ```
 
 ## Run (API + UI locally, Postgres in Docker)
@@ -59,14 +59,14 @@ Embeddings stay local. Default is Ollama `nomic-embed-text` (`EMBEDDING_BACKEND=
 ```bash
 brew install ollama
 ollama serve
-ollama pull llama3.2
+ollama pull qwen2.5:7b
 ollama pull nomic-embed-text
 ```
 
 Then chat in the notebook or run the eval harness:
 
 ```bash
-PYTHONPATH=apps/api .venv/bin/python -m app.eval --provider ollama --model llama3.2
+PYTHONPATH=apps/api .venv/bin/python -m app.eval --provider ollama --model qwen2.5:7b
 ```
 
 Open http://localhost:3000/eval to review chat answers, HTML extract quality, the model-written source report, and Studio outputs (Mindmap, Report, Quiz). Score Treue, Nutzen, Zitate (1–5), pass/fail, and a comment. Start a second run with another model and use Vergleichen.

@@ -11,7 +11,7 @@ export default function EvalPage() {
   const [compareId, setCompareId] = useState("");
   const [compareRows, setCompareRows] = useState<{ case_id: string; question: string; a: EvalItem | null; b: EvalItem | null }[]>([]);
   const [provider, setProvider] = useState("ollama");
-  const [model, setModel] = useState("llama3.2");
+  const [model, setModel] = useState("qwen2.5:7b");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [reviewer, setReviewer] = useState("reviewer");

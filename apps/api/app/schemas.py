@@ -2,7 +2,13 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def plain_text(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    return "".join(ch if ch in "\n\t" or ord(ch) >= 32 else " " for ch in value)
 
 
 class ModelCard(BaseModel):
@@ -80,6 +86,11 @@ class CitationOut(BaseModel):
     cited_in_report: bool
 
     model_config = {"from_attributes": True}
+
+    @field_validator("title", "quote", "url", mode="before")
+    @classmethod
+    def _plain_cite(cls, value: Any) -> Any:
+        return plain_text(value)
 
 
 class SourceDetail(SourceOut):
@@ -187,6 +198,11 @@ class ResearchJobOut(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_validator("query", "progress", "report_md", mode="before")
+    @classmethod
+    def _plain_job(cls, value: Any) -> Any:
+        return plain_text(value)
+
 
 class ResearchImportIn(BaseModel):
     citation_ids: list[uuid.UUID]
@@ -214,7 +230,7 @@ class UserOut(BaseModel):
 
 class EvalStartIn(BaseModel):
     provider: Literal["ollama", "eu", "openrouter"] = "ollama"
-    model_id: str = "llama3.2"
+    model_id: str = "qwen2.5:7b"
 
 
 class HumanScoreIn(BaseModel):

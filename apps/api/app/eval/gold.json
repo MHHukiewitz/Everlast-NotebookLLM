@@ -19,8 +19,8 @@
     "id": "embeddings_local",
     "task": "chat",
     "question": "Bleiben die Embeddings lokal, wenn ein Cloud-Modell antwortet?",
-    "expected_answer": "Ja. Die Vektoren bleiben im Haus. Nur Frage und relevante Chunks gehen nach außen.",
-    "keywords": ["Vektoren", "Chunks"],
+    "expected_answer": "Ja. Die Embeddings bleiben lokal. Die Vektoren bleiben im Haus. Nur Frage und relevante Chunks gehen nach außen.",
+    "keywords": ["Embeddings", "lokal"],
     "must_refuse": false
   },
   {

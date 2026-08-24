@@ -31,7 +31,7 @@ class Notebook(Base):
     tenant_id: Mapped[str] = mapped_column(String(64), index=True)
     title: Mapped[str] = mapped_column(String(255), default="Unbenanntes Notebook")
     provider: Mapped[str] = mapped_column(String(32), default="ollama")
-    model_id: Mapped[str] = mapped_column(String(255), default="llama3.2")
+    model_id: Mapped[str] = mapped_column(String(255), default="qwen2.5:7b")
     tts_provider: Mapped[str] = mapped_column(String(32), default="local")
     tts_model: Mapped[str] = mapped_column(String(255), default="kokoro")
     image_provider: Mapped[str] = mapped_column(String(32), default="local")

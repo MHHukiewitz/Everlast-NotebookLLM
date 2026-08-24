@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     redis_url: str = ""
 
     default_provider: str = "ollama"
-    default_model: str = "llama3.2"
+    default_model: str = "qwen2.5:7b"
     ollama_api_base: str = "http://localhost:11434"
 
     openrouter_api_key: str = ""
