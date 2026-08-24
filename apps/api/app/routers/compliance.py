@@ -19,7 +19,7 @@ async def compliance_info() -> dict:
         "ai_disclosure": "Sie sprechen mit einem KI-System (Everlast Notebook).",
         "generated_mark": AI_MARK,
         "no_training": True,
-        "default_provider": "ollama",
+        "default_provider": settings.default_provider,
         "embeddings_leave_machine": False,
         "retention_days": settings.retention_days,
         "research_scratch_days": settings.research_scratch_days,

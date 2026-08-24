@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://notebook:notebook@localhost:5432/notebook"
     redis_url: str = ""
 
-    default_provider: str = "ollama"
-    default_model: str = "qwen2.5:7b"
+    default_provider: str = "hetzner"
+    default_model: str = "Qwen/Qwen3.6-35B-A3B-FP8"
     ollama_api_base: str = "http://localhost:11434"
 
     openrouter_api_key: str = ""
@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     eu_llm_base_url: str = ""
     eu_llm_api_key: str = ""
     eu_llm_models: str = ""
+
+    hetzner_api_base: str = "https://inference.hetzner.com/api/v1"
+    hetzner_api_key: str = ""
+    hetzner_models: str = "Qwen/Qwen3.6-35B-A3B-FP8,Qwen3.8-27B"
 
     embedding_backend: str = "ollama"
     embedding_dim: int = 768
@@ -44,6 +48,8 @@ class Settings(BaseSettings):
     image_local_models: str = "flux"
     image_eu_models: str = ""
     image_openrouter_models: str = "google/gemini-2.5-flash-image"
+    default_image_provider: str = "openrouter"
+    default_image_model: str = "google/gemini-2.5-flash-image"
 
     searxng_url: str = "http://localhost:8080"
     langfuse_host: str = ""

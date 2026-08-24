@@ -5,16 +5,18 @@ from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db import get_session
 from app.deps import owned_notebook
 from app.models import AuditEvent, Citation, Notebook, Source
 from app.schemas import AddTextIn, AddUrlIn, SelectSourceIn, SourceDetail, SourceOut
 from app.services.autoname import maybe_autoname
 from app.services.ingest import (
+    extract_upload_text,
     finalize_source,
     ingest_text,
     ingest_url,
-    parse_upload,
+    is_image_filename,
     refresh_model_summary,
     store_file,
 )
@@ -105,8 +107,10 @@ async def add_file(
 ) -> Source:
     data = await upload.read()
     filename = upload.filename or "upload.bin"
+    if is_image_filename(filename) and not settings.hetzner_api_key:
+        raise HTTPException(400, "Bilder brauchen Hetzner Inference. Setze HETZNER_API_KEY oder wähle Hetzner.")
     path = store_file(notebook.id, filename, data)
-    text = parse_upload(filename, data)
+    text = await extract_upload_text(notebook, filename, data)
     source = Source(
         tenant_id=notebook.tenant_id,
         notebook_id=notebook.id,

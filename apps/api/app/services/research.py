@@ -170,6 +170,8 @@ def _provider_ready(notebook: Notebook | None) -> bool:
         return False
     if notebook.provider == "ollama" and not host_open(settings.ollama_api_base):
         return False
+    if notebook.provider == "hetzner" and not settings.hetzner_api_key:
+        return False
     if notebook.provider == "openrouter" and not settings.openrouter_api_key:
         return False
     if notebook.provider == "eu" and not (settings.eu_llm_base_url and settings.eu_llm_api_key):

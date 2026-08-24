@@ -10,12 +10,57 @@ import { ArtifactCard } from "@/components/studio/ArtifactCard";
 import { StudioRunModal } from "@/components/studio/StudioRunModal";
 import { StudioSkillButton } from "@/components/studio/StudioSkillButton";
 import { ApiError, api, streamChat, streamChatResume, uploadFile } from "@/lib/api";
-import { applyChatEvent, toolCallsFromMessage, visibleChatText, type LivePart } from "@/lib/chatLive";
+import {
+  applyChatEvent,
+  displayChatText,
+  stepsFromReasoning,
+  toolCallsFromMessage,
+  usedCitations,
+  type LivePart,
+} from "@/lib/chatLive";
+import { ThinkingTrace } from "@/components/chat/ThinkingTrace";
 import { t } from "@/lib/i18n";
 import { ACTIVE_NOTEBOOK_KEY, SOURCE_SORT_KEY } from "@/lib/notebook";
 import { displayUrl, isHttpUrl, sourceFavicon } from "@/lib/source";
 import { DEFAULT_SOURCE_SORT, formatSourceSort, parseSourceSort, sortSources, type SourceSort } from "@/lib/sourceSort";
-import type { Artifact, AuthUser, Message, Modalities, Notebook, Provider, ResearchJob, Skill, Source, SourceDetail } from "@/lib/types";
+import type {
+  Artifact,
+  AuthUser,
+  Message,
+  MessageCitation,
+  Modalities,
+  Notebook,
+  Provider,
+  ResearchJob,
+  Skill,
+  Source,
+  SourceDetail,
+} from "@/lib/types";
+
+function CitationChips({
+  citations,
+  onCite,
+}: {
+  citations: MessageCitation[];
+  onCite: (cite: MessageCitation) => void;
+}) {
+  if (!citations.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1">
+      {citations.map((cite) => (
+        <button
+          key={`${cite.n}-${cite.chunk_id || cite.url || cite.title}`}
+          type="button"
+          className="rounded bg-blue-50 px-1.5 text-xs text-accent"
+          title={cite.quote}
+          onClick={() => onCite(cite)}
+        >
+          [{cite.n}]
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function SourceIcon({ origin, favicon }: { origin: string | null | undefined; favicon?: string | null }) {
   const [broken, setBroken] = useState(false);
@@ -64,6 +109,7 @@ export default function Page() {
   const [mode, setMode] = useState<"fast" | "deep">("fast");
   const [chatInput, setChatInput] = useState("");
   const [liveParts, setLiveParts] = useState<LivePart[]>([]);
+  const [liveCitations, setLiveCitations] = useState<MessageCitation[]>([]);
   const [pendingResearchId, setPendingResearchId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const liveSeq = useRef(0);
@@ -368,11 +414,15 @@ export default function Page() {
       if (event.event === "warning") {
         setError(String(event.text || ""));
       }
+      if ((event.event === "meta" || event.event === "done") && Array.isArray(event.citations)) {
+        setLiveCitations(event.citations as MessageCitation[]);
+      }
       setLiveParts((parts) => applyChatEvent(parts, event, nextLiveId));
     }).then(async () => {
       await refresh(notebook.id);
       await syncNotebook(notebook.id);
       setLiveParts([]);
+      setLiveCitations([]);
       setPendingResearchId(null);
       setBusy(false);
     });
@@ -386,6 +436,18 @@ export default function Page() {
       void refresh(notebook.id);
     }
     setLiveParts([]);
+    setLiveCitations([]);
+  }
+
+  function openCite(cite: MessageCitation) {
+    if (!notebook) return;
+    if (cite.source_id) {
+      api.source(notebook.id, cite.source_id).then(setActiveSource);
+      return;
+    }
+    if (cite.url) {
+      window.open(cite.url, "_blank", "noopener,noreferrer");
+    }
   }
 
   async function onSend(text?: string) {
@@ -394,6 +456,7 @@ export default function Page() {
     if (!content) return;
     setChatInput("");
     setLiveParts([]);
+    setLiveCitations([]);
     setError("");
     setBusy(true);
     setMessages((prev) => [
@@ -404,6 +467,9 @@ export default function Page() {
     await streamChat(notebook.id, content, (event) => {
       if (event.event === "warning") {
         setError(String(event.text || ""));
+      }
+      if ((event.event === "meta" || event.event === "done") && Array.isArray(event.citations)) {
+        setLiveCitations(event.citations as MessageCitation[]);
       }
       setLiveParts((parts) => applyChatEvent(parts, event, nextLiveId));
       if (event.event === "research_pending" || event.research_pending) {
@@ -428,7 +494,44 @@ export default function Page() {
     await refresh(notebook.id);
     await syncNotebook(notebook.id);
     setLiveParts([]);
+    setLiveCitations([]);
     setBusy(false);
+  }
+
+  const hetznerLane = (modalities?.llm || providers).find((lane) => lane.id === "hetzner");
+  const openrouterLane = (modalities?.llm || providers).find((lane) => lane.id === "openrouter");
+
+  function providerLabel(id: string) {
+    if (id === "ollama") return t.local;
+    if (id === "hetzner") return t.hetzner;
+    if (id === "eu") return t.eu;
+    return t.openrouter;
+  }
+
+  function providerHint(id: string) {
+    if (id === "hetzner") return t.hetznerHint;
+    if (id === "openrouter") return t.openrouterHint;
+    return undefined;
+  }
+
+  async function onInference(provider: "ollama" | "hetzner" | "openrouter") {
+    if (!notebook || notebook.provider === provider) return;
+    const lane = (modalities?.llm || providers).find((item) => item.id === provider);
+    const model = lane?.models[0]?.id || notebook.model_id;
+    const next = {
+      ...notebook,
+      provider,
+      model_id: model,
+      openrouter_notice_accepted: provider === "openrouter" ? true : notebook.openrouter_notice_accepted,
+    };
+    if (provider === "openrouter") setOrOk(true);
+    setNotebook(next);
+    const saved = await api.updateNotebook(notebook.id, {
+      provider,
+      model_id: model,
+      openrouter_notice_accepted: provider === "openrouter" ? true : undefined,
+    });
+    setNotebook(saved);
   }
 
   async function saveSettings() {
@@ -536,9 +639,38 @@ export default function Page() {
           <button className="btn" onClick={onBrowse}>
             {t.notebooks}
           </button>
-          <span className="rounded-full bg-mist px-3 py-1 text-xs">
-            {notebook.provider === "ollama" ? t.local : notebook.provider === "eu" ? t.eu : t.openrouter} · {notebook.model_id.split("/").pop()}
-          </span>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-full bg-mist p-0.5 text-xs" role="group" aria-label={t.chatModel}>
+              <button
+                type="button"
+                className={`rounded-full px-2.5 py-1 ${notebook.provider === "ollama" ? "bg-white font-medium text-ink" : "text-neutral-500"}`}
+                onClick={() => onInference("ollama")}
+              >
+                {t.local}
+              </button>
+              <button
+                type="button"
+                className={`rounded-full px-2.5 py-1 ${notebook.provider === "hetzner" ? "bg-white font-medium text-ink" : "text-neutral-500"}`}
+                disabled={!hetznerLane?.available}
+                title={hetznerLane?.notice || t.hetznerHint}
+                onClick={() => onInference("hetzner")}
+              >
+                {t.hetzner}
+              </button>
+              <button
+                type="button"
+                className={`rounded-full px-2.5 py-1 ${notebook.provider === "openrouter" ? "bg-white font-medium text-ink" : "text-neutral-500"}`}
+                disabled={!openrouterLane?.available}
+                title={openrouterLane?.notice || t.openrouterHint}
+                onClick={() => onInference("openrouter")}
+              >
+                {t.openrouter}
+              </button>
+            </div>
+            <span className="rounded-full bg-mist px-3 py-1 text-xs" title={providerHint(notebook.provider)}>
+              {providerLabel(notebook.provider)} · {notebook.model_id.split("/").pop()}
+            </span>
+          </div>
           <a className="btn" href="/eval">
             Eval
           </a>
@@ -753,7 +885,7 @@ export default function Page() {
                 <p className="mt-2">{t.emptySourcesHint}</p>
                 <label className="mt-6 cursor-pointer text-accent">
                   {t.drop}
-                  <input type="file" className="hidden" multiple onChange={(e) => onFiles(e.target.files)} />
+                  <input type="file" className="hidden" multiple accept={t.uploadAccept} onChange={(e) => onFiles(e.target.files)} />
                 </label>
               </div>
             ) : (
@@ -827,36 +959,35 @@ export default function Page() {
                 {messages.map((message) => (
                   <article key={message.id} className={message.role === "user" ? "text-right" : ""}>
                     <div className={`inline-block max-w-full rounded-2xl px-4 py-3 text-sm ${message.role === "user" ? "bg-mist" : "bg-white"}`}>
-                      {message.role === "assistant" &&
-                        toolCallsFromMessage(message.tool_calls).map((tool) => <ToolCallCard key={tool.call_id} tool={tool} />)}
-                      {message.content ? <MarkdownBody>{visibleChatText(message.content)}</MarkdownBody> : null}
-                      {message.citations?.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {message.citations.map((c) => (
-                            <button
-                              key={`${c.n}-${c.chunk_id || c.url || c.title}`}
-                              className="rounded bg-blue-50 px-1.5 text-xs text-accent"
-                              title={c.quote}
-                              onClick={() => {
-                                if (c.source_id) {
-                                  api.source(notebook.id, c.source_id).then(setActiveSource);
-                                  return;
-                                }
-                                if (c.url) {
-                                  window.open(c.url, "_blank", "noopener,noreferrer");
-                                }
-                              }}
-                            >
-                              [{c.n}]
-                            </button>
-                          ))}
-                        </div>
+                      {message.role === "assistant" && (
+                        <ThinkingTrace
+                          steps={stepsFromReasoning(message.reasoning)}
+                          tools={toolCallsFromMessage(message.tool_calls)}
+                        />
                       )}
+                      {message.role === "assistant" &&
+                        toolCallsFromMessage(message.tool_calls)
+                          .filter((tool) => !stepsFromReasoning(message.reasoning).some((step) => step.call_id === tool.call_id))
+                          .map((tool) => <ToolCallCard key={tool.call_id} tool={tool} />)}
+                      {message.content ? (
+                        <MarkdownBody
+                          citations={usedCitations(displayChatText(message.content), message.citations)}
+                          onCite={openCite}
+                        >
+                          {displayChatText(message.content)}
+                        </MarkdownBody>
+                      ) : null}
+                      {message.role === "assistant" ? (
+                        <CitationChips
+                          citations={usedCitations(displayChatText(message.content), message.citations)}
+                          onCite={openCite}
+                        />
+                      ) : null}
                       {message.role === "assistant" && (
                         <button
                           className="mt-2 text-xs text-accent"
                           onClick={() =>
-                            api.createNote(notebook.id, t.newNote, visibleChatText(message.content), message.id).then(async () => {
+                            api.createNote(notebook.id, t.newNote, displayChatText(message.content), message.id).then(async () => {
                               await refresh(notebook.id);
                               await syncNotebook(notebook.id);
                             })
@@ -872,27 +1003,48 @@ export default function Page() {
                   <article>
                     <div className="rounded-2xl bg-white px-4 py-3 text-sm">
                       {pendingResearchId && <p className="mb-2 text-xs text-neutral-500">{t.researchWait}</p>}
-                      {liveParts.length === 0 && (
+                      {!liveParts.some((part) => part.kind === "step") && (
                         <div className="thinking" aria-label={t.thinking} role="status">
                           <span className="thinking-dot" />
                           <span className="thinking-dot" />
                           <span className="thinking-dot" />
                         </div>
                       )}
-                      {liveParts.map((part) =>
-                        part.kind === "tool" ? (
-                          <ToolCallCard key={part.id} tool={part.tool} />
-                        ) : (
-                          <MarkdownBody key={part.id}>{visibleChatText(part.text)}</MarkdownBody>
-                        ),
-                      )}
-                      {liveParts.length > 0 && busy && !liveParts.some((part) => part.kind === "text" && part.text.trim()) && (
-                        <div className="thinking mt-2" aria-label={t.thinking} role="status">
-                          <span className="thinking-dot" />
-                          <span className="thinking-dot" />
-                          <span className="thinking-dot" />
-                        </div>
-                      )}
+                      <ThinkingTrace
+                        steps={liveParts.filter((part): part is Extract<LivePart, { kind: "step" }> => part.kind === "step").map((part) => part.step)}
+                        tools={liveParts.filter((part): part is Extract<LivePart, { kind: "tool" }> => part.kind === "tool").map((part) => part.tool)}
+                        think={liveParts
+                          .filter((part): part is Extract<LivePart, { kind: "think" }> => part.kind === "think")
+                          .map((part) => part.text)
+                          .join("")}
+                        busy={busy}
+                      />
+                      {liveParts
+                        .filter((part): part is Extract<LivePart, { kind: "text" }> => part.kind === "text")
+                        .map((part) => {
+                          const liveText = displayChatText(part.text);
+                          return (
+                            <MarkdownBody
+                              key={part.id}
+                              citations={usedCitations(liveText, liveCitations)}
+                              onCite={openCite}
+                            >
+                              {liveText}
+                            </MarkdownBody>
+                          );
+                        })}
+                      <CitationChips
+                        citations={usedCitations(
+                          displayChatText(
+                            liveParts
+                              .filter((part): part is Extract<LivePart, { kind: "text" }> => part.kind === "text")
+                              .map((part) => part.text)
+                              .join(""),
+                          ),
+                          liveCitations,
+                        )}
+                        onCite={openCite}
+                      />
                     </div>
                   </article>
                 )}
@@ -917,7 +1069,7 @@ export default function Page() {
               <div className="flex items-center justify-between">
                 <label className="cursor-pointer text-neutral-400">
                   📎
-                  <input type="file" className="hidden" onChange={(e) => onFiles(e.target.files)} />
+                  <input type="file" className="hidden" accept={t.uploadAccept} onChange={(e) => onFiles(e.target.files)} />
                 </label>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-neutral-500">{t.sourcesCount(selectedCount)}</span>
@@ -1030,8 +1182,9 @@ export default function Page() {
           <hr className="my-4" />
           <label className="btn cursor-pointer">
             {t.upload}
-            <input type="file" className="hidden" multiple disabled={addBusy} onChange={(e) => onFiles(e.target.files).then(() => setAddOpen(false))} />
+            <input type="file" className="hidden" multiple accept={t.uploadAccept} disabled={addBusy} onChange={(e) => onFiles(e.target.files).then(() => setAddOpen(false))} />
           </label>
+          <p className="mt-2 text-xs text-neutral-500">{t.uploadHint}</p>
         </Modal>
       )}
 

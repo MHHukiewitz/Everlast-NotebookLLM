@@ -1,17 +1,31 @@
 import inspect
+import uuid
 
 from app.schemas import plain_text
 from app.services import skills
+import asyncio
+from types import SimpleNamespace
+
 from app.services.chat_agent import (
     NO_ANSWER,
     SYSTEM,
+    TOOL_SKIPPED,
+    _stream_pass,
+    citation_marks,
     extract_leaked_tools,
     is_smalltalk,
     json_object_complete,
     parse_tool_args,
     research_query,
     research_scratch,
+    retrieve_step_detail,
+    run_chat,
+    split_incomplete_tool,
+    step_event,
+    strip_citation_dump,
+    thinking_text,
     tool_prelude_events,
+    used_citations,
 )
 
 
@@ -71,6 +85,7 @@ def test_leaked_tool_extract() -> None:
     assert "Hallo" in cleaned
     assert "Ende" in cleaned
     assert calls[0]["name"] == "sources.list"
+    assert calls[0]["runnable"] is True
 
 
 def test_leaked_notes_create_is_stripped_not_run() -> None:
@@ -81,12 +96,332 @@ def test_leaked_notes_create_is_stripped_not_run() -> None:
     cleaned, calls = extract_leaked_tools(raw)
     assert "notes_create" not in cleaned
     assert "keine klare Antwort" not in cleaned
-    assert calls == []
+    assert len(calls) == 1
+    assert calls[0]["name"] == "notes.create"
+    assert calls[0]["runnable"] is False
+
+
+def test_leaked_tool_shapes() -> None:
+    shapes = [
+        '{"tool": "notes.create", "parameters": {"title": "x"}}',
+        '{"function": {"name": "notes_create", "arguments": {}}}',
+        "<tool_call>{\"name\": \"notes_create\", \"arguments\": {}}</tool_call>",
+        "```json\n{\"name\": \"notes_create\", \"arguments\": {}}\n```",
+    ]
+    for raw in shapes:
+        cleaned, calls = extract_leaked_tools(raw)
+        assert "notes_create" not in cleaned
+        assert "notes.create" not in cleaned
+        assert calls[0]["name"] == "notes.create"
+        assert calls[0]["runnable"] is False
+
+
+def test_split_incomplete_tool_holds_prefixes() -> None:
+    assert split_incomplete_tool("Hallo {") == ("Hallo ", "{")
+    assert split_incomplete_tool("Hallo <tool_call>") == ("Hallo ", "<tool_call>")
+    visible, held = split_incomplete_tool("Hallo ```json\n")
+    assert visible == "Hallo "
+    assert held.startswith("```json")
+    visible, held = split_incomplete_tool('Text {"name": "notes_create"')
+    assert visible == "Text "
+    assert held.startswith("{")
+
+
+def test_citation_dump_and_used_filter() -> None:
+    raw = "[1] [2] [3] [4] [5] [6] [7] [8]\n\nEverlast berät Unternehmen [1]."
+    cleaned = strip_citation_dump(raw)
+    assert "[2]" not in cleaned
+    assert "Everlast berät Unternehmen [1]." in cleaned
+    assert citation_marks(cleaned) == {1}
+    cites = [{"n": index, "quote": str(index)} for index in range(1, 9)]
+    assert [item["n"] for item in used_citations(cleaned, cites)] == [1]
+    assert used_citations("Keine Zitate.", cites) == []
 
 
 def test_plain_text_strips_control_chars() -> None:
     assert "\x0b" not in plain_text("Hallo\x0bWelt\nOK")
     assert "Hallo Welt\nOK" == plain_text("Hallo\x0bWelt\nOK")
+
+
+def test_retrieve_step_detail_counts_hits() -> None:
+    detail = retrieve_step_detail(
+        [
+            {"source_id": "a", "text": "eins"},
+            {"source_id": "a", "text": "zwei"},
+            {"source_id": "b", "text": "drei"},
+        ]
+    )
+    assert detail == "3 Treffer in 2 Quellen"
+    assert retrieve_step_detail([]) == "Keine Treffer"
+    event = step_event("retrieve", "Quellen durchsuchen", retrieve_step_detail(
+        [{"source_id": "a", "text": "x"}] * 8 + [{"source_id": "b", "text": "y"}]
+    ))
+    assert event["event"] == "step"
+    assert event["kind"] == "retrieve"
+    assert event["detail"] == "9 Treffer in 2 Quellen"
+
+
+def test_thinking_text_reads_reasoning_and_thinking() -> None:
+    assert thinking_text(SimpleNamespace(reasoning_content="Schritt", thinking=None, model_extra=None)) == "Schritt"
+    assert thinking_text(SimpleNamespace(reasoning_content=None, thinking="Denk", model_extra=None)) == "Denk"
+    assert thinking_text(SimpleNamespace(reasoning_content=None, thinking=None, model_extra=None)) == ""
+
+
+def _delta(content=None, reasoning_content=None, thinking=None):
+    return SimpleNamespace(
+        content=content,
+        reasoning_content=reasoning_content,
+        thinking=thinking,
+        tool_calls=None,
+        model_extra=None,
+    )
+
+
+def test_stream_pass_keeps_thinking_out_of_tokens(monkeypatch) -> None:
+    async def fake_stream(*_args, **_kwargs):
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=_delta(reasoning_content="Ich prüfe die Frage"))])
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=_delta(content="Die Antwort."))])
+
+    monkeypatch.setattr("app.services.chat_agent.router.stream_chat", fake_stream)
+    executed: list = []
+
+    async def collect():
+        events = []
+        notebook = SimpleNamespace(provider="ollama", model_id="qwen2.5:7b")
+        async for event in _stream_pass(SimpleNamespace(), notebook, [], None, executed):
+            events.append(event)
+        return events
+
+    events = asyncio.run(collect())
+    kinds = [event["event"] for event in events]
+    assert kinds.count("think") == 1
+    assert events[0]["event"] == "think"
+    assert events[0]["text"] == "Ich prüfe die Frage"
+    assert "think" not in [event.get("text") for event in events if event["event"] == "token"]
+    tokens = "".join(event["text"] for event in events if event["event"] == "token")
+    assert tokens == "Die Antwort."
+    assert "Ich prüfe" not in tokens
+    assert any(event["event"] == "step" and event["kind"] == "write" for event in events)
+
+
+def test_stream_pass_without_thinking_has_no_think_event(monkeypatch) -> None:
+    async def fake_stream(*_args, **_kwargs):
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=_delta(content="Nur Text"))])
+
+    monkeypatch.setattr("app.services.chat_agent.router.stream_chat", fake_stream)
+
+    async def collect():
+        events = []
+        notebook = SimpleNamespace(provider="ollama", model_id="qwen2.5:7b")
+        async for event in _stream_pass(SimpleNamespace(), notebook, [], None, []):
+            events.append(event)
+        return events
+
+    events = asyncio.run(collect())
+    assert all(event["event"] != "think" for event in events)
+    assert any(event["event"] == "token" and event["text"] == "Nur Text" for event in events)
+
+
+def test_stream_pass_keeps_spaces_between_chunks(monkeypatch) -> None:
+    async def fake_stream(*_args, **_kwargs):
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=_delta(content="Hallo "))])
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=_delta(content="Welt."))])
+
+    monkeypatch.setattr("app.services.chat_agent.router.stream_chat", fake_stream)
+
+    async def collect():
+        events = []
+        notebook = SimpleNamespace(provider="ollama", model_id="qwen2.5:7b")
+        async for event in _stream_pass(SimpleNamespace(), notebook, [], None, []):
+            events.append(event)
+        return events
+
+    events = asyncio.run(collect())
+    tokens = "".join(event["text"] for event in events if event["event"] == "token")
+    assert tokens == "Hallo Welt."
+
+
+def test_stream_pass_holds_brace_and_skips_notes_create(monkeypatch) -> None:
+    async def fake_stream(*_args, **_kwargs):
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=_delta(content="{"))])
+        yield SimpleNamespace(
+            choices=[SimpleNamespace(delta=_delta(content='"name": "notes_create", "arguments": {}}'))]
+        )
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=_delta(content="Die Antwort bleibt."))])
+
+    async def boom(*_args, **_kwargs):
+        raise AssertionError("notes.create must not run")
+
+    monkeypatch.setattr("app.services.chat_agent.router.stream_chat", fake_stream)
+    monkeypatch.setattr("app.services.chat_agent.run_skill", boom)
+    messages: list = []
+    executed: list = []
+
+    async def collect():
+        events = []
+        notebook = SimpleNamespace(provider="ollama", model_id="qwen2.5:7b")
+        async for event in _stream_pass(SimpleNamespace(), notebook, messages, None, executed):
+            events.append(event)
+        return events
+
+    events = asyncio.run(collect())
+    tokens = [event["text"] for event in events if event["event"] == "token"]
+    assert all("{" not in text for text in tokens)
+    assert "".join(tokens) == "Die Antwort bleibt."
+    assert any(event["event"] == "tool_start" for event in events)
+    assert any(event["event"] == "tool_name" and event.get("skill_id") == "notes.create" for event in events)
+    assert any(event["event"] == "tool_result" and event.get("result") == TOOL_SKIPPED for event in events)
+    assert executed[0]["skipped"] is True
+    assert executed[0]["skill_id"] == "notes.create"
+    assert all(item.get("role") != "tool" for item in messages)
+    assert all(not item.get("tool_calls") for item in messages)
+
+
+def test_stream_pass_skips_native_non_chat_tool(monkeypatch) -> None:
+    def tool_delta(name=None, arguments=None, call_id="call_native"):
+        return SimpleNamespace(
+            content=None,
+            reasoning_content=None,
+            thinking=None,
+            model_extra=None,
+            tool_calls=[
+                SimpleNamespace(
+                    index=0,
+                    id=call_id,
+                    function=SimpleNamespace(name=name, arguments=arguments),
+                )
+            ],
+        )
+
+    async def fake_stream(*_args, **_kwargs):
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=tool_delta(name="notes_create"))])
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=tool_delta(arguments="{}"))])
+
+    async def boom(*_args, **_kwargs):
+        raise AssertionError("notes.create must not run")
+
+    monkeypatch.setattr("app.services.chat_agent.router.stream_chat", fake_stream)
+    monkeypatch.setattr("app.services.chat_agent.run_skill", boom)
+    messages: list = []
+    executed: list = []
+
+    async def collect():
+        events = []
+        notebook = SimpleNamespace(provider="ollama", model_id="qwen2.5:7b")
+        async for event in _stream_pass(SimpleNamespace(), notebook, messages, None, executed):
+            events.append(event)
+        return events
+
+    events = asyncio.run(collect())
+    assert any(event["event"] == "tool_result" and event.get("result") == TOOL_SKIPPED for event in events)
+    assert executed[0]["skipped"] is True
+    assert executed[0]["skill_id"] == "notes.create"
+    assert all(not item.get("tool_calls") for item in messages)
+
+
+class _ChatSession:
+    def add(self, row) -> None:
+        if getattr(row, "id", None) is None:
+            row.id = uuid.uuid4()
+
+    async def commit(self) -> None:
+        return
+
+    async def flush(self) -> None:
+        return
+
+    async def execute(self, *_args, **_kwargs):
+        return SimpleNamespace(scalars=lambda: [])
+
+
+def test_run_chat_emits_retrieve_step(monkeypatch) -> None:
+    chunks = [
+        {"source_id": "s1", "chunk_id": "c1", "source_title": "A", "text": "Everlast AI"},
+        {"source_id": "s2", "chunk_id": "c2", "source_title": "B", "text": "Beratung"},
+    ]
+
+    async def fake_ids(*_args, **_kwargs):
+        return []
+
+    async def fake_search(*_args, **_kwargs):
+        return chunks
+
+    async def fake_stream(*_args, **_kwargs):
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=_delta(content="Kurzantwort."))])
+
+    async def fake_record(*_args, **_kwargs):
+        return
+
+    monkeypatch.setattr("app.services.chat_agent.selected_source_ids", fake_ids)
+    monkeypatch.setattr("app.services.chat_agent.hybrid_search", fake_search)
+    monkeypatch.setattr("app.services.chat_agent._host_open", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("app.services.chat_agent.router.stream_chat", fake_stream)
+    monkeypatch.setattr("app.services.chat_agent.record_generation", fake_record)
+    monkeypatch.setattr("app.services.chat_agent.start_trace", lambda *_args, **_kwargs: "trace")
+    notebook = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id="default",
+        provider="ollama",
+        model_id="qwen2.5:7b",
+    )
+
+    async def collect():
+        events = []
+        async for event in run_chat(_ChatSession(), notebook, "Was macht Everlast AI?"):
+            events.append(event)
+        return events
+
+    events = asyncio.run(collect())
+    retrieve = [event for event in events if event.get("event") == "step" and event.get("kind") == "retrieve"]
+    assert retrieve
+    assert retrieve[0]["detail"] == "2 Treffer in 2 Quellen"
+    assert all(event["event"] != "think" for event in events)
+    done = next(event for event in events if event["event"] == "done")
+    assert done["citations"] == []
+
+
+def test_run_chat_keeps_used_citations_only(monkeypatch) -> None:
+    chunks = [
+        {"source_id": f"s{index}", "chunk_id": f"c{index}", "source_title": "A", "text": f"text {index}"}
+        for index in range(1, 9)
+    ]
+
+    async def fake_ids(*_args, **_kwargs):
+        return []
+
+    async def fake_search(*_args, **_kwargs):
+        return chunks
+
+    async def fake_stream(*_args, **_kwargs):
+        yield SimpleNamespace(
+            choices=[SimpleNamespace(delta=_delta(content="[1] [2] [3] [4] [5] [6] [7] [8]\n\nEverlast [1]."))]
+        )
+
+    async def fake_record(*_args, **_kwargs):
+        return
+
+    monkeypatch.setattr("app.services.chat_agent.selected_source_ids", fake_ids)
+    monkeypatch.setattr("app.services.chat_agent.hybrid_search", fake_search)
+    monkeypatch.setattr("app.services.chat_agent._host_open", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("app.services.chat_agent.router.stream_chat", fake_stream)
+    monkeypatch.setattr("app.services.chat_agent.record_generation", fake_record)
+    monkeypatch.setattr("app.services.chat_agent.start_trace", lambda *_args, **_kwargs: "trace")
+    notebook = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id="default",
+        provider="ollama",
+        model_id="qwen2.5:7b",
+    )
+
+    async def collect():
+        events = []
+        async for event in run_chat(_ChatSession(), notebook, "Was macht Everlast AI?"):
+            events.append(event)
+        return events
+
+    events = asyncio.run(collect())
+    done = next(event for event in events if event["event"] == "done")
+    assert [item["n"] for item in done["citations"]] == [1]
 
 
 def test_research_skills_enqueue_only() -> None:

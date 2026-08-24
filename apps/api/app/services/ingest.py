@@ -1,10 +1,14 @@
 import asyncio
+import base64
 import io
 import re
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 from urllib.parse import urljoin, urlparse
+
+from PIL import Image
 
 import httpx
 import trafilatura
@@ -26,6 +30,16 @@ _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _CITED_QUOTE = re.compile(r"\[(\d+)\]\s*[\"«„“](.+?)[\"»“”]", re.DOTALL)
 _BARE_URL = re.compile(r"https?://[^\s)>\]]+")
 _OUTER_FENCE = re.compile(r"^```(?:[a-zA-Z0-9_-]*)?\s*\n([\s\S]*?)\n```(?:\s*\n([\s\S]*))?$")
+_IMAGE_SUFFIX = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+_VISION_MAX_SIDE = 1600
+VISION_SYSTEM = (
+    "Du bist Everlast Notebook, ein KI-System. "
+    "Lies nur das gelieferte Bild. "
+    "Schreibe sichtbaren Text wörtlich. "
+    "Beschreibe Diagramme, Tabellen und das Layout kurz auf Deutsch. "
+    "Erfinde keine Fakten, Zahlen, Namen oder Daten, die nicht im Bild stehen."
+)
+VISION_USER = "Lies das Bild und schreibe den Inhalt auf Deutsch."
 
 
 def unwrap_markdown_fence(text: str) -> str:
@@ -118,6 +132,63 @@ def parse_upload(filename: str, data: bytes) -> str:
     if lower.endswith(".docx"):
         return parse_docx(data)
     return data.decode("utf-8", errors="replace")
+
+
+def is_image_filename(filename: str) -> bool:
+    return Path(filename).suffix.lower() in _IMAGE_SUFFIX
+
+
+def vision_route(notebook: Notebook | None) -> tuple[str, str]:
+    if not settings.hetzner_api_key:
+        raise ValueError("Bilder brauchen Hetzner Inference. Setze HETZNER_API_KEY oder wähle Hetzner.")
+    if notebook is not None and notebook.provider == "hetzner" and notebook.model_id:
+        return "hetzner", notebook.model_id
+    models = [item.strip() for item in settings.hetzner_models.split(",") if item.strip()]
+    return "hetzner", models[0]
+
+
+def normalize_image(data: bytes) -> tuple[str, bytes]:
+    image = Image.open(io.BytesIO(data))
+    image = image.convert("RGB")
+    image.thumbnail((_VISION_MAX_SIDE, _VISION_MAX_SIDE))
+    out = io.BytesIO()
+    image.save(out, format="JPEG", quality=85)
+    return "image/jpeg", out.getvalue()
+
+
+def image_data_url(data: bytes) -> str:
+    media, payload = normalize_image(data)
+    encoded = base64.b64encode(payload).decode("ascii")
+    return f"data:{media};base64,{encoded}"
+
+
+def vision_messages(data_url: str) -> list[dict[str, Any]]:
+    return [
+        {"role": "system", "content": VISION_SYSTEM},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": VISION_USER},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        },
+    ]
+
+
+async def describe_image(notebook: Notebook | None, data: bytes) -> str:
+    provider, model_id = vision_route(notebook)
+    messages = vision_messages(image_data_url(data))
+    completion = await router.complete(provider, model_id, messages)
+    text = (completion.choices[0].message.content or "").strip()
+    if not text:
+        raise ValueError("Das Bild lieferte keinen Text.")
+    return unwrap_markdown_fence(text)
+
+
+async def extract_upload_text(notebook: Notebook | None, filename: str, data: bytes) -> str:
+    if is_image_filename(filename):
+        return await describe_image(notebook, data)
+    return parse_upload(filename, data)
 
 
 def favicon_from_url(url: str) -> str:
@@ -250,6 +321,8 @@ async def write_model_summary(session: AsyncSession, source: Source, text: str) 
     if notebook is None:
         return fallback, 0
     if notebook.provider == "ollama" and not host_open(settings.ollama_api_base):
+        return fallback, 0
+    if notebook.provider == "hetzner" and not settings.hetzner_api_key:
         return fallback, 0
     if notebook.provider == "openrouter" and not settings.openrouter_api_key:
         return fallback, 0

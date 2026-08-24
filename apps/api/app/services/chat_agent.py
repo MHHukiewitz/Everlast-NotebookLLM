@@ -22,6 +22,7 @@ NO_ANSWER = "Die Quellen enthalten dazu keine klare Antwort."
 NO_SOURCES = "Ich bin ein KI-System. Füge Quellen hinzu oder stelle eine Frage."
 RESEARCH_WAIT = "Ich suche im Web nach weiteren Fakten…"
 SEARX_DOWN = "SearXNG ist nicht erreichbar. Starte den SearXNG-Container."
+TOOL_SKIPPED = "Nicht ausgeführt"
 MAX_TOOL_ROUNDS = 4
 
 SYSTEM = f"""Du bist Everlast Notebook, ein KI-System. Sage das klar.
@@ -53,8 +54,16 @@ Hänge Zitate in der Form [n] an Sätze an, wenn du eine Faktantwort gibst. n is
 Markiere generierten Text als KI-generiert, wenn du einen Bericht schreibst.
 """
 
-_TOOL_OBJECT_START = re.compile(r'\{\s*"name"\s*:')
-_TOOL_NAME_HOLD = re.compile(r'\{\s*"name"\s*:\s*"([^"]+)"')
+_TOOL_OBJECT_START = re.compile(r'\{\s*"(?:name|tool|function|parameters)"\s*:')
+_TOOL_NAME_HOLD = re.compile(
+    r'\{\s*"(?:name|tool)"\s*:\s*"([^"]+)"'
+    r'|"function"\s*:\s*\{\s*"name"\s*:\s*"([^"]+)"'
+)
+_TOOL_CALL_OPEN = re.compile(r"<tool_call>", re.I)
+_FENCE_OPEN = re.compile(r"```(?:json)?[ \t]*\n", re.I)
+_CITE_MARK = re.compile(r"\[(\d+)\]")
+_DUMP_LINE = re.compile(r"^\s*(?:\[\d+\]\s*)+$")
+_TOOL_KEY_PREFIX = re.compile(r'\{\s*"([A-Za-z_]*)"?\s*:?')
 _DELETE_TARGET = re.compile(
     r"(?:entferne|lösche|löschen|remove|delete)\s+(?:die\s+|das\s+|den\s+|the\s+)?(.+)",
     re.I,
@@ -84,6 +93,10 @@ def _tools_for_prompt() -> list[dict[str, Any]]:
     return [tool_schema(skill_id) for skill_id in CHAT_TOOLS]
 
 
+def can_run_chat_tool(skill_id: str) -> bool:
+    return skill_id in CHAT_TOOLS or skill_id.startswith("research.")
+
+
 def new_call_id() -> str:
     return f"call_{uuid.uuid4().hex[:12]}"
 
@@ -93,6 +106,92 @@ def skill_title(skill_id: str) -> str:
     if skill is None:
         return skill_id
     return skill.card.title
+
+
+WRITE_STEP_ID = "write"
+
+
+def new_step_id() -> str:
+    return f"step_{uuid.uuid4().hex[:12]}"
+
+
+def retrieve_step_detail(chunks: list[dict[str, Any]]) -> str:
+    if not chunks:
+        return "Keine Treffer"
+    sources = {str(chunk.get("source_id") or "") for chunk in chunks}
+    sources.discard("")
+    return f"{len(chunks)} Treffer in {len(sources)} Quellen"
+
+
+def tool_args_detail(args: dict[str, Any]) -> str:
+    for key in ("query", "url", "title", "text"):
+        value = args.get(key)
+        if value:
+            return str(value)[:80]
+    return ""
+
+
+def tool_result_detail(skill_id: str, args: dict[str, Any], result: Any) -> str:
+    if isinstance(result, dict) and "count" in result:
+        return f"{result['count']} Quelle(n)"
+    if isinstance(result, dict) and result.get("query"):
+        return str(result["query"])[:80]
+    return tool_args_detail(args) or skill_title(skill_id)
+
+
+def thinking_text(delta: Any) -> str:
+    if delta is None:
+        return ""
+    for attr in ("reasoning_content", "thinking"):
+        value = getattr(delta, attr, None)
+        if value:
+            return str(value)
+    extra = getattr(delta, "model_extra", None) or {}
+    if isinstance(extra, dict):
+        for key in ("reasoning_content", "thinking"):
+            value = extra.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def step_event(
+    kind: str,
+    title: str,
+    detail: str = "",
+    status: str = "done",
+    step_id: str | None = None,
+    call_id: str = "",
+) -> dict[str, Any]:
+    event = {
+        "event": "step",
+        "id": step_id or new_step_id(),
+        "kind": kind,
+        "title": title,
+        "detail": detail,
+        "status": status,
+    }
+    if call_id:
+        event["call_id"] = call_id
+    return event
+
+
+def record_step(reasoning: list[Any], event: dict[str, Any]) -> None:
+    if event.get("event") != "step":
+        return
+    step = {
+        "id": event["id"],
+        "title": event["title"],
+        "detail": event.get("detail") or "",
+        "kind": event["kind"],
+    }
+    if event.get("call_id"):
+        step["call_id"] = event["call_id"]
+    for index, item in enumerate(reasoning):
+        if isinstance(item, dict) and item.get("id") == step["id"]:
+            reasoning[index] = step
+            return
+    reasoning.append(step)
 
 
 def delete_target(text: str) -> str:
@@ -178,38 +277,238 @@ def _balanced_object(text: str, start: int) -> str:
     return ""
 
 
-def extract_leaked_tools(text: str) -> tuple[str, list[dict[str, str]]]:
-    calls: list[dict[str, str]] = []
-    parts: list[str] = []
-    index = 0
-    while index < len(text):
-        found = _TOOL_OBJECT_START.search(text, index)
-        if found is None:
-            parts.append(text[index:])
-            break
+def _tool_call_entry(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    raw_name = str(name).strip()
+    skill_id = resolve_tool_name(raw_name)
+    display = skill_id or raw_name
+    return {
+        "name": display,
+        "arguments": json.dumps(args, ensure_ascii=False),
+        "runnable": bool(skill_id and can_run_chat_tool(skill_id)),
+    }
+
+
+def _call_from_parsed(parsed: dict[str, Any]) -> dict[str, Any] | None:
+    name = parsed.get("name") or parsed.get("tool")
+    fn = parsed.get("function")
+    args: Any = parsed.get("arguments")
+    if args is None:
+        args = parsed.get("parameters")
+    if args is None:
+        args = parsed.get("args")
+    if not name and isinstance(fn, dict):
+        name = fn.get("name")
+        if args is None:
+            args = fn.get("arguments")
+        if args is None:
+            args = fn.get("parameters")
+    if not name:
+        return None
+    if args is None:
+        args = {}
+    if isinstance(args, str):
+        parsed_args = parse_tool_args(args)
+        args = parsed_args if parsed_args is not None else {}
+    if not isinstance(args, dict):
+        args = {}
+    return _tool_call_entry(str(name), args)
+
+
+def _call_from_leak_text(raw: str) -> dict[str, Any] | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    fence = re.fullmatch(r"```(?:json)?\s*(.*)\s*```", text, re.S | re.I)
+    if fence:
+        text = fence.group(1).strip()
+    parsed = parse_tool_args(text)
+    if parsed is None:
+        obj_at = text.find("{")
+        if obj_at >= 0:
+            blob = _balanced_object(text, obj_at)
+            if blob:
+                parsed = parse_tool_args(blob)
+    if parsed is not None:
+        return _call_from_parsed(parsed)
+    name = text.strip().strip("`").strip()
+    if not name or any(char in name for char in " \n\t{}[]"):
+        return None
+    return _tool_call_entry(name, {})
+
+
+def extract_leaked_tools(text: str) -> tuple[str, list[dict[str, Any]]]:
+    spans: list[tuple[int, int, dict[str, Any] | None]] = []
+    for found in _TOOL_CALL_OPEN.finditer(text):
+        close = re.search(r"</tool_call>", text[found.end() :], re.I)
+        if close is None:
+            continue
+        inner = text[found.end() : found.end() + close.start()]
+        spans.append((found.start(), found.end() + close.end(), _call_from_leak_text(inner)))
+    for found in _FENCE_OPEN.finditer(text):
+        close_at = text.find("```", found.end())
+        if close_at < 0:
+            continue
+        inner = text[found.end() : close_at]
+        call = _call_from_leak_text(inner)
+        if call is None and _TOOL_OBJECT_START.search(inner) is None:
+            continue
+        spans.append((found.start(), close_at + 3, call))
+    for found in _TOOL_OBJECT_START.finditer(text):
         blob = _balanced_object(text, found.start())
         if not blob:
-            parts.append(text[index:])
-            break
-        parts.append(text[index : found.start()])
-        parsed = parse_tool_args(blob)
-        name = parsed.get("name") if parsed else None
-        args = parsed.get("arguments") if parsed else None
-        skill_id = resolve_tool_name(str(name)) if name else None
-        if skill_id and (skill_id in CHAT_TOOLS or skill_id.startswith("research.")):
-            calls.append({"name": skill_id, "arguments": json.dumps(args or {}, ensure_ascii=False)})
-        index = found.start() + len(blob)
-    cleaned = re.sub(r"```(?:json)?\s*```", "", "".join(parts))
-    return re.sub(r"\n{3,}", "\n\n", cleaned).strip(), calls
+            continue
+        if any(start <= found.start() < end for start, end, _call in spans):
+            continue
+        spans.append((found.start(), found.start() + len(blob), _call_from_leak_text(blob)))
+    spans.sort(key=lambda item: item[0])
+    calls: list[dict[str, Any]] = []
+    parts: list[str] = []
+    index = 0
+    for start, end, call in spans:
+        if start < index:
+            continue
+        parts.append(text[index:start])
+        if call:
+            calls.append(call)
+        index = end
+    parts.append(text[index:])
+    cleaned = re.sub(r"```(?:json)?\s*```", "", "".join(parts), flags=re.I)
+    cleaned = re.sub(r"</?tool_call>", "", cleaned, flags=re.I)
+    return re.sub(r"\n{3,}", "\n\n", cleaned), calls
+
+
+def _is_toolish_prefix(rest: str) -> bool:
+    if re.match(r"\{\s*$", rest):
+        return True
+    found = _TOOL_KEY_PREFIX.match(rest)
+    if found is None:
+        return False
+    key = found.group(1).lower()
+    return any(candidate.startswith(key) for candidate in ("name", "tool", "function", "parameters"))
 
 
 def split_incomplete_tool(text: str) -> tuple[str, str]:
-    match = None
+    hold_at: int | None = None
+
+    def consider(pos: int) -> None:
+        nonlocal hold_at
+        if hold_at is None or pos < hold_at:
+            hold_at = pos
+
+    for found in _TOOL_CALL_OPEN.finditer(text):
+        if re.search(r"</tool_call>", text[found.end() :], re.I) is None:
+            consider(found.start())
+    for found in _FENCE_OPEN.finditer(text):
+        if "```" not in text[found.end() :]:
+            consider(found.start())
+    fence_tail = re.search(r"```(?:json)?\s*$", text, re.I)
+    if fence_tail:
+        consider(fence_tail.start())
     for found in _TOOL_OBJECT_START.finditer(text):
-        match = found
-    if match is None:
+        if not _balanced_object(text, found.start()):
+            consider(found.start())
+    trimmed = text.rstrip()
+    if trimmed.endswith("{"):
+        consider(len(trimmed) - 1)
+    else:
+        for index, char in enumerate(text):
+            if char != "{":
+                continue
+            if _balanced_object(text, index):
+                continue
+            if _is_toolish_prefix(text[index:]):
+                consider(index)
+                break
+    if hold_at is None:
         return text, ""
-    return text[: match.start()], text[match.start() :]
+    return text[:hold_at], text[hold_at:]
+
+
+def citation_marks(text: str) -> set[int]:
+    return {int(found.group(1)) for found in _CITE_MARK.finditer(text or "")}
+
+
+def strip_citation_dump(text: str) -> str:
+    kept = [line for line in (text or "").splitlines() if not _DUMP_LINE.match(line)]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+
+def used_citations(text: str, citation_map: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    used = citation_marks(text)
+    return [item for item in citation_map if item.get("n") in used]
+
+
+def finalize_answer(text: str, citation_map: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    cleaned = strip_citation_dump(text)
+    return cleaned, used_citations(cleaned, citation_map)
+
+
+def skipped_tool_record(call_id: str, skill_id: str, args: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "call_id": call_id,
+        "skill_id": skill_id,
+        "arguments": args,
+        "result": TOOL_SKIPPED,
+        "status": "done",
+        "skipped": True,
+    }
+
+
+def skipped_tool_finish_events(call_id: str, skill_id: str) -> list[dict[str, Any]]:
+    return [
+        {"event": "tool_result", "call_id": call_id, "skill_id": skill_id, "result": TOOL_SKIPPED},
+        step_event("tool", skill_title(skill_id), TOOL_SKIPPED, step_id=call_id, call_id=call_id),
+    ]
+
+
+async def _emit_leaked_call(
+    session: AsyncSession,
+    notebook: Notebook,
+    messages: list[dict[str, Any]],
+    leak: dict[str, Any],
+    executed: list[dict[str, Any]],
+    call_id: str,
+    started: bool,
+    args_sent: str,
+    visible_pass: str,
+) -> AsyncIterator[dict[str, Any]]:
+    skill_id = str(leak["name"])
+    args = parse_tool_args(str(leak.get("arguments") or "{}")) or {}
+    if not started:
+        for event in tool_prelude_events(call_id, skill_id, args):
+            yield event
+    elif args_sent != leak["arguments"]:
+        rest = leak["arguments"][len(args_sent) :] if args_sent else leak["arguments"]
+        if rest:
+            yield {"event": "tool_args", "call_id": call_id, "delta": rest}
+    if not leak.get("runnable"):
+        executed.append(skipped_tool_record(call_id, skill_id, args))
+        for event in skipped_tool_finish_events(call_id, skill_id):
+            yield event
+        return
+    messages.append(
+        {
+            "role": "assistant",
+            "content": visible_pass or None,
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": skill_id, "arguments": leak["arguments"]},
+                }
+            ],
+        }
+    )
+    record = await _run_recorded_skill(session, notebook, skill_id, args, call_id, call_id, messages)
+    executed.append(record)
+    yield {"event": "tool_result", "call_id": call_id, "skill_id": skill_id, "result": record["result"]}
+    yield step_event(
+        "tool",
+        skill_title(skill_id),
+        tool_result_detail(skill_id, args, record["result"]),
+        step_id=call_id,
+        call_id=call_id,
+    )
 
 
 def tool_prelude_events(call_id: str, skill_id: str, arguments: dict[str, Any]) -> list[dict[str, Any]]:
@@ -258,7 +557,7 @@ async def _save_assistant(
     model_label: str,
     trace_id: str | None,
     raw_output: str,
-    reasoning: list[str],
+    reasoning: list[Any],
     kind: str,
     prompt: str,
     extra: dict[str, Any],
@@ -326,7 +625,9 @@ async def _run_recorded_skill(
 
 def _provider_ready(notebook: Notebook) -> str:
     if notebook.provider == "ollama" and not _host_open(settings.ollama_api_base):
-        return "Ollama ist nicht erreichbar. Starte Ollama oder wähle OpenRouter in den Einstellungen."
+        return "Ollama ist nicht erreichbar. Starte Ollama oder wähle Hetzner in den Einstellungen."
+    if notebook.provider == "hetzner" and not settings.hetzner_api_key:
+        raise ValueError("HETZNER_API_KEY fehlt.")
     if notebook.provider == "openrouter" and not settings.openrouter_api_key:
         raise ValueError("OPENROUTER_API_KEY fehlt.")
     if notebook.provider == "eu" and not (settings.eu_llm_base_url and settings.eu_llm_api_key):
@@ -341,6 +642,14 @@ async def _emit_rule_skill(
     args: dict[str, Any],
 ) -> AsyncIterator[dict[str, Any]]:
     call_id = new_call_id()
+    yield step_event(
+        "tool",
+        skill_title(skill_id),
+        tool_args_detail(args),
+        status="running",
+        step_id=call_id,
+        call_id=call_id,
+    )
     for event in tool_prelude_events(call_id, skill_id, args):
         yield event
     result = await run_skill(session, notebook, skill_id, args)
@@ -352,6 +661,13 @@ async def _emit_rule_skill(
         "status": "done",
     }
     yield {"event": "tool_result", "call_id": call_id, "skill_id": skill_id, "result": result}
+    yield step_event(
+        "tool",
+        skill_title(skill_id),
+        tool_result_detail(skill_id, args, result),
+        step_id=call_id,
+        call_id=call_id,
+    )
     yield {"_record": record}
 
 
@@ -374,6 +690,10 @@ async def run_chat(
 
     model_label = f"{notebook.provider}/{notebook.model_id}"
     started = time.perf_counter()
+    reasoning: list[Any] = []
+    analyze = step_event("analyze", "Frage prüfen", user_text[:80])
+    record_step(reasoning, analyze)
+    yield analyze
 
     target = delete_target(user_text)
     if tools_enabled and target:
@@ -383,6 +703,7 @@ async def run_chat(
             if "_record" in item:
                 tool_calls.append(item["_record"])
                 continue
+            record_step(reasoning, item)
             yield item
         result = tool_calls[0]["result"]
         count = int(result["count"])
@@ -390,6 +711,9 @@ async def run_chat(
             assistant_text = f"Ich habe {count} Quelle(n) entfernt, die zu „{target}“ passen."
         else:
             assistant_text = f"Keine Quelle passt zu „{target}“."
+        write = step_event("write", "Antwort schreiben", step_id=WRITE_STEP_ID)
+        record_step(reasoning, write)
+        yield write
         yield {"event": "token", "text": assistant_text}
         assistant = await _save_assistant(
             session,
@@ -400,7 +724,7 @@ async def run_chat(
             model_label=model_label,
             trace_id=trace_id,
             raw_output="",
-            reasoning=[f"Fähigkeit: sources.delete_matching"],
+            reasoning=reasoning,
             kind="chat_rule",
             prompt=user_text,
             extra={"rule": "delete_target"},
@@ -417,12 +741,24 @@ async def run_chat(
 
     query = research_query(user_text)
     if tools_enabled and query:
-        async for event in _research_turn(session, notebook, query, model_label, started, user_text, "research_intent"):
+        async for event in _research_turn(
+            session,
+            notebook,
+            query,
+            model_label,
+            started,
+            user_text,
+            "research_intent",
+            prior_reasoning=reasoning,
+        ):
             yield event
         return
 
     source_ids = await selected_source_ids(session, notebook.id)
     chunks = await hybrid_search(session, notebook.id, notebook.tenant_id, user_text, source_ids)
+    retrieve = step_event("retrieve", "Quellen durchsuchen", retrieve_step_detail(chunks))
+    record_step(reasoning, retrieve)
+    yield retrieve
     context_blocks = []
     citation_map = []
     for index, chunk in enumerate(chunks, start=1):
@@ -457,11 +793,12 @@ async def run_chat(
 
     offline = _provider_ready(notebook)
     if offline:
+        offline_text, offline_cites = finalize_answer(offline, citation_map)
         assistant = await _save_assistant(
             session,
             notebook,
-            content=offline,
-            citations=citation_map,
+            content=offline_text,
+            citations=offline_cites,
             tool_calls=[],
             model_label=model_label,
             trace_id=None,
@@ -471,8 +808,8 @@ async def run_chat(
             prompt=user_text,
             extra={"error": "ollama_offline"},
         )
-        yield {"event": "token", "text": offline}
-        yield {"event": "done", "message_id": str(assistant.id), "citations": citation_map, "model": model_label}
+        yield {"event": "token", "text": offline_text}
+        yield {"event": "done", "message_id": str(assistant.id), "citations": offline_cites, "model": model_label}
         return
 
     trace_id = start_trace("chat", notebook.tenant_id, {"notebook_id": str(notebook.id), "model": model_label})
@@ -481,7 +818,6 @@ async def run_chat(
     tools = _tools_for_prompt() if tools_enabled else None
     assistant_text = ""
     raw_output = ""
-    reasoning: list[str] = []
     tool_calls = []
     mutated_sources = False
     pending_job_id = ""
@@ -494,10 +830,14 @@ async def run_chat(
                 piece = str(event.get("text") or "")
                 assistant_text += piece
                 raw_output += piece
+            record_step(reasoning, event)
             yield event
+        ran_tool = False
         for record in executed:
             tool_calls.append(record)
-            reasoning.append(f"Fähigkeit: {record['skill_id']}")
+            if record.get("skipped"):
+                continue
+            ran_tool = True
             if record["skill_id"].startswith("sources."):
                 mutated_sources = True
             if record["skill_id"].startswith("research."):
@@ -505,7 +845,7 @@ async def run_chat(
                 pending_query = str(record["result"].get("query") or record["arguments"].get("query") or user_text)
         if pending_job_id:
             break
-        if not executed:
+        if not ran_tool:
             break
         tools = _tools_for_prompt() if tools_enabled else None
 
@@ -522,6 +862,7 @@ async def run_chat(
                     piece = str(event.get("text") or "")
                     assistant_text += piece
                     raw_output += piece
+                record_step(reasoning, event)
                 yield event
             assistant_text, _leaks = extract_leaked_tools(assistant_text)
 
@@ -584,11 +925,15 @@ async def run_chat(
 
     if not assistant_text:
         assistant_text = NO_SOURCES if not chunks else NO_ANSWER
+        write = step_event("write", "Antwort schreiben", step_id=WRITE_STEP_ID)
+        record_step(reasoning, write)
+        yield write
         yield {"event": "token", "text": assistant_text}
 
     if mutated_sources:
         citation_map = []
 
+    assistant_text, citation_map = finalize_answer(assistant_text, citation_map)
     faith = overlap_score(assistant_text, chunks) if chunks and not mutated_sources else 1.0
     if chunks and not mutated_sources and faith < 0.12:
         yield {"event": "warning", "text": "Antwort weicht stark von den zitierten Chunks ab."}
@@ -629,7 +974,7 @@ async def _research_turn(
     rule: str,
     prior_text: str = "",
     prior_tools: list[dict[str, Any]] | None = None,
-    prior_reasoning: list[str] | None = None,
+    prior_reasoning: list[Any] | None = None,
     trace_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     if not searx_reachable():
@@ -654,14 +999,20 @@ async def _research_turn(
 
     tool_calls = list(prior_tools or [])
     reasoning = list(prior_reasoning or [])
+    research = step_event("research", "Websuche starten", query[:80])
+    record_step(reasoning, research)
+    yield research
     async for item in _emit_rule_skill(session, notebook, "research.fast", {"query": query}):
         if "_record" in item:
             tool_calls.append(item["_record"])
-            reasoning.append("Fähigkeit: research.fast")
             continue
+        record_step(reasoning, item)
         yield item
     job_id = str(tool_calls[-1]["result"]["job_id"])
     wait_text = prior_text.strip()
+    write = step_event("write", "Antwort schreiben", step_id=WRITE_STEP_ID)
+    record_step(reasoning, write)
+    yield write
     if wait_text and wait_text not in {NO_ANSWER, NO_SOURCES}:
         assistant_text = f"{wait_text}\n\n{RESEARCH_WAIT}"
         yield {"event": "token", "text": "\n\n" + RESEARCH_WAIT}
@@ -709,75 +1060,75 @@ async def _stream_pass(
     leak_call_id = ""
     leak_args_sent = ""
     visible_pass = ""
+    wrote = False
 
     async for chunk in router.stream_chat(notebook.provider, notebook.model_id, messages, tools):
         delta = chunk.choices[0].delta
         if delta is None:
             continue
+        think = thinking_text(delta)
+        if think:
+            yield {"event": "think", "text": think}
         content = getattr(delta, "content", None)
         if content:
             hold += content
             cleaned, leaked = extract_leaked_tools(hold)
-            visible, hold = split_incomplete_tool(cleaned if leaked else hold)
-            if leaked:
-                hold = ""
+            visible, hold = split_incomplete_tool(cleaned)
             if visible:
+                if not wrote:
+                    wrote = True
+                    yield step_event("write", "Antwort schreiben", status="running", step_id=WRITE_STEP_ID)
                 visible_pass += visible
                 yield {"event": "token", "text": visible}
             name_hold = _TOOL_NAME_HOLD.search(hold)
             if name_hold and not leak_call_id:
-                skill_id = resolve_tool_name(name_hold.group(1))
-                if skill_id:
-                    leak_call_id = new_call_id()
-                    leak_named = skill_id
-                    yield {"event": "tool_start", "call_id": leak_call_id}
-                    yield {
-                        "event": "tool_name",
-                        "call_id": leak_call_id,
-                        "skill_id": skill_id,
-                        "name": skill_title(skill_id),
-                    }
+                raw_name = name_hold.group(1) or name_hold.group(2)
+                skill_id = resolve_tool_name(raw_name) or raw_name
+                leak_call_id = new_call_id()
+                yield {"event": "tool_start", "call_id": leak_call_id}
+                yield {
+                    "event": "tool_name",
+                    "call_id": leak_call_id,
+                    "skill_id": skill_id,
+                    "name": skill_title(skill_id),
+                }
+                yield step_event(
+                    "tool",
+                    skill_title(skill_id),
+                    status="running",
+                    step_id=leak_call_id,
+                    call_id=leak_call_id,
+                )
             if leak_call_id and hold:
-                args_match = re.search(r'"arguments"\s*:\s*(\{.*)', hold, re.DOTALL)
+                args_match = re.search(r'"(?:arguments|parameters)"\s*:\s*(\{.*)', hold, re.DOTALL)
                 if args_match:
                     args_so_far = args_match.group(1)
                     delta_args = args_so_far[len(leak_args_sent) :]
                     if delta_args:
                         leak_args_sent = args_so_far
                         yield {"event": "tool_args", "call_id": leak_call_id, "delta": delta_args}
+            ran_leak = False
             for leak in leaked:
-                skill_id = leak["name"]
-                args = parse_tool_args(leak["arguments"]) or {}
                 call_id = leak_call_id or new_call_id()
-                if not leak_call_id:
-                    for event in tool_prelude_events(call_id, skill_id, args):
-                        yield event
-                elif leak_args_sent != leak["arguments"]:
-                    rest = leak["arguments"][len(leak_args_sent) :] if leak_args_sent else leak["arguments"]
-                    if rest:
-                        yield {"event": "tool_args", "call_id": call_id, "delta": rest}
-                tool_call_id = call_id
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": visible_pass or None,
-                        "tool_calls": [
-                            {
-                                "id": tool_call_id,
-                                "type": "function",
-                                "function": {"name": skill_id, "arguments": leak["arguments"]},
-                            }
-                        ],
-                    }
-                )
-                record = await _run_recorded_skill(
-                    session, notebook, skill_id, args, call_id, tool_call_id, messages
-                )
-                executed.append(record)
-                yield {"event": "tool_result", "call_id": call_id, "skill_id": skill_id, "result": record["result"]}
+                async for event in _emit_leaked_call(
+                    session,
+                    notebook,
+                    messages,
+                    leak,
+                    executed,
+                    call_id,
+                    bool(leak_call_id),
+                    leak_args_sent,
+                    visible_pass,
+                ):
+                    yield event
+                if leak.get("runnable"):
+                    ran_leak = True
                 leak_call_id = ""
                 leak_args_sent = ""
-            if leaked:
+            if ran_leak:
+                if wrote:
+                    yield step_event("write", "Antwort schreiben", step_id=WRITE_STEP_ID)
                 return
         raw_tools = getattr(delta, "tool_calls", None) or []
         for call in raw_tools:
@@ -810,42 +1161,60 @@ async def _stream_pass(
                         "skill_id": skill_id,
                         "name": skill_title(skill_id) if skill_id in REGISTRY else skill_id,
                     }
+                    yield step_event(
+                        "tool",
+                        skill_title(skill_id) if skill_id in REGISTRY else skill_id,
+                        status="running",
+                        step_id=slot["call_id"],
+                        call_id=slot["call_id"],
+                    )
             if call.function and call.function.arguments:
                 slot["arguments"] += call.function.arguments
                 yield {"event": "tool_args", "call_id": slot["call_id"], "delta": call.function.arguments}
 
     if hold.strip():
         cleaned, leaked = extract_leaked_tools(hold)
-        if cleaned:
-            visible_pass += cleaned
-            yield {"event": "token", "text": cleaned}
+        visible, _incomplete = split_incomplete_tool(cleaned)
+        if visible:
+            if not wrote:
+                wrote = True
+                yield step_event("write", "Antwort schreiben", status="running", step_id=WRITE_STEP_ID)
+            visible_pass += visible
+            yield {"event": "token", "text": visible}
         for leak in leaked:
-            skill_id = leak["name"]
-            args = parse_tool_args(leak["arguments"]) or {}
             call_id = leak_call_id or new_call_id()
-            if not leak_call_id:
-                for event in tool_prelude_events(call_id, skill_id, args):
-                    yield event
-            tool_call_id = call_id
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": visible_pass or None,
-                    "tool_calls": [
-                        {
-                            "id": tool_call_id,
-                            "type": "function",
-                            "function": {"name": skill_id, "arguments": leak["arguments"]},
-                        }
-                    ],
-                }
-            )
-            record = await _run_recorded_skill(session, notebook, skill_id, args, call_id, tool_call_id, messages)
-            executed.append(record)
-            yield {"event": "tool_result", "call_id": call_id, "skill_id": skill_id, "result": record["result"]}
+            async for event in _emit_leaked_call(
+                session,
+                notebook,
+                messages,
+                leak,
+                executed,
+                call_id,
+                bool(leak_call_id),
+                leak_args_sent,
+                visible_pass,
+            ):
+                yield event
+            leak_call_id = ""
+            leak_args_sent = ""
 
     to_run = [slot for slot in pending.values() if slot["started"] and slot["name"]]
-    if not to_run:
+    runnable_slots: list[tuple[dict[str, Any], str]] = []
+    for slot in to_run:
+        if any(record["call_id"] == slot["call_id"] for record in executed):
+            continue
+        skill_id = resolve_tool_name(slot["name"])
+        args = parse_tool_args(slot["arguments"]) or {}
+        if skill_id and can_run_chat_tool(skill_id):
+            runnable_slots.append((slot, skill_id))
+            continue
+        display = skill_id or slot["name"]
+        executed.append(skipped_tool_record(slot["call_id"], display, args))
+        for event in skipped_tool_finish_events(slot["call_id"], display):
+            yield event
+    if not runnable_slots:
+        if wrote:
+            yield step_event("write", "Antwort schreiben", step_id=WRITE_STEP_ID)
         return
     messages.append(
         {
@@ -857,16 +1226,11 @@ async def _stream_pass(
                     "type": "function",
                     "function": {"name": slot["name"], "arguments": slot["arguments"] or "{}"},
                 }
-                for slot in to_run
+                for slot, _skill in runnable_slots
             ],
         }
     )
-    for slot in to_run:
-        skill_id = resolve_tool_name(slot["name"])
-        if skill_id is None:
-            continue
-        if any(record["call_id"] == slot["call_id"] for record in executed):
-            continue
+    for slot, skill_id in runnable_slots:
         args = parse_tool_args(slot["arguments"]) or {}
         record = await _run_recorded_skill(
             session,
@@ -879,6 +1243,15 @@ async def _stream_pass(
         )
         executed.append(record)
         yield {"event": "tool_result", "call_id": slot["call_id"], "skill_id": skill_id, "result": record["result"]}
+        yield step_event(
+            "tool",
+            skill_title(skill_id),
+            tool_result_detail(skill_id, args, record["result"]),
+            step_id=slot["call_id"],
+            call_id=slot["call_id"],
+        )
+    if wrote:
+        yield step_event("write", "Antwort schreiben", step_id=WRITE_STEP_ID)
 
 
 async def run_chat_resume(
@@ -898,12 +1271,13 @@ async def run_chat_resume(
     model_label = f"{notebook.provider}/{notebook.model_id}"
     offline = _provider_ready(notebook)
     if offline:
-        yield {"event": "token", "text": offline}
+        offline_text, offline_cites = finalize_answer(offline, citation_map)
+        yield {"event": "token", "text": offline_text}
         assistant = await _save_assistant(
             session,
             notebook,
-            content=offline,
-            citations=citation_map,
+            content=offline_text,
+            citations=offline_cites,
             tool_calls=[],
             model_label=model_label,
             trace_id=None,
@@ -913,7 +1287,7 @@ async def run_chat_resume(
             prompt=job.query,
             extra={"error": "ollama_offline", "job_id": str(job.id)},
         )
-        yield {"event": "done", "message_id": str(assistant.id), "citations": citation_map, "model": model_label}
+        yield {"event": "done", "message_id": str(assistant.id), "citations": offline_cites, "model": model_label}
         return
 
     messages = [
@@ -923,6 +1297,13 @@ async def run_chat_resume(
     ]
     trace_id = start_trace("chat_research", notebook.tenant_id, {"notebook_id": str(notebook.id), "job_id": str(job.id)})
     yield {"event": "meta", "model": model_label, "trace_id": trace_id, "citations": citation_map}
+    reasoning: list[Any] = []
+    research = step_event("research", "Recherche nutzen", job.query[:80])
+    record_step(reasoning, research)
+    yield research
+    write = step_event("write", "Antwort schreiben", status="running", step_id=WRITE_STEP_ID)
+    record_step(reasoning, write)
+    yield write
     assistant_text = ""
     raw_output = ""
     started = time.perf_counter()
@@ -930,6 +1311,9 @@ async def run_chat_resume(
         delta = chunk.choices[0].delta
         if delta is None:
             continue
+        think = thinking_text(delta)
+        if think:
+            yield {"event": "think", "text": think}
         content = getattr(delta, "content", None)
         if content:
             assistant_text += content
@@ -938,6 +1322,10 @@ async def run_chat_resume(
     if not assistant_text:
         assistant_text = "Die Recherche enthält dazu keine klare Antwort."
         yield {"event": "token", "text": assistant_text}
+    write = step_event("write", "Antwort schreiben", step_id=WRITE_STEP_ID)
+    record_step(reasoning, write)
+    yield write
+    assistant_text, citation_map = finalize_answer(assistant_text, citation_map)
     assistant = await _save_assistant(
         session,
         notebook,
@@ -947,7 +1335,7 @@ async def run_chat_resume(
         model_label=model_label,
         trace_id=trace_id,
         raw_output=raw_output,
-        reasoning=["Recherche fertig"],
+        reasoning=reasoning,
         kind="chat_research",
         prompt=pack_prompt(messages),
         extra={"job_id": str(job.id), "query": job.query, "prompt_version": settings.prompt_version},

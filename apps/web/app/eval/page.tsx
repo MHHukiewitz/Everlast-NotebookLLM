@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { SiteFooter } from "@/components/SiteFooter";
 import { ApiError, api, type EvalItem, type EvalRun, type GenerationLog } from "@/lib/api";
+import { reasoningLabel } from "@/lib/chatLive";
 import { t } from "@/lib/i18n";
 
 export default function EvalPage() {
@@ -116,6 +117,7 @@ export default function EvalPage() {
             Provider
             <select className="mt-1 block rounded border border-line px-2 py-1" value={provider} onChange={(e) => setProvider(e.target.value)}>
               <option value="ollama">Lokal</option>
+              <option value="hetzner">Hetzner</option>
               <option value="eu">EU</option>
               <option value="openrouter">OpenRouter</option>
             </select>
@@ -316,7 +318,10 @@ export default function EvalPage() {
                   <span>{row.created_at}</span>
                 </div>
                 {row.reasoning.length > 0 && (
-                  <p className="mt-2">Ablauf: {row.reasoning.join(" · ")}</p>
+                  <p className="mt-2">
+                    Ablauf:{" "}
+                    {row.reasoning.map(reasoningLabel).filter(Boolean).join(" · ")}
+                  </p>
                 )}
                 <details className="mt-2">
                   <summary>Prompt</summary>

@@ -74,7 +74,7 @@ export type Message = {
   tool_calls: unknown[];
   model: string | null;
   created_at: string;
-  reasoning?: string[];
+  reasoning?: unknown[];
 };
 
 export type ArtifactCitation = {

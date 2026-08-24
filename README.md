@@ -6,7 +6,7 @@ Source-grounded research notebook for the Everlast GmbH assignment. The app clon
 
 - Next.js UI (German)
 - FastAPI, PostgreSQL + pgvector, Redis
-- Ollama (default), EU OpenAI-compatible gateway, OpenRouter
+- Ollama (default), Hetzner Inference (EU), EU OpenAI-compatible gateway, OpenRouter
 - SearXNG, optional Langfuse
 
 ## Run (Compose)
@@ -49,6 +49,7 @@ cd apps/web && npm install && npm run dev
 ## Model routes
 
 - **Lokal** — Ollama. Default. Data stays on the machine.
+- **Hetzner** — set `HETZNER_API_KEY`. EU inference. Usually faster than local models.
 - **EU** — set `EU_LLM_BASE_URL` and `EU_LLM_API_KEY`. Confirm the AVV notice.
 - **OpenRouter** — set `OPENROUTER_API_KEY`. Confirm the transfer notice. Demo only.
 

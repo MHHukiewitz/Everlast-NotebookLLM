@@ -1,12 +1,11 @@
 import io
-import math
 from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
 from app.services.pdf import AI_MARK
-from app.services.studio.mindmap import MindNode, parse_mindmap
+from app.services.studio.mindmap import layout_mindmap, parse_mindmap
 
 FILLS = ((239, 246, 255), (245, 243, 255), (240, 253, 244), (255, 247, 237))
 CHART_COLORS = ((37, 99, 235), (124, 58, 237), (22, 163, 74), (217, 119, 6), (219, 39, 119), (8, 145, 178))
@@ -193,47 +192,28 @@ def mindmap_png(title: str, payload: dict[str, Any]) -> bytes:
     node_font = _font(15)
     probe = Image.new("RGB", (10, 10), (255, 255, 255))
     draw = ImageDraw.Draw(probe)
-    boxes: dict[int, tuple[int, int, int, int, str]] = {}
-    next_leaf_y = 80
 
-    def measure(node: MindNode) -> tuple[int, int]:
-        lines = _wrap(draw, node.label, node_font, 200) or [node.label]
+    def measure(label: str) -> tuple[int, int]:
+        lines = _wrap(draw, label, node_font, 200) or [label]
         return (int(max(draw.textlength(line, font=node_font) for line in lines)) + 28, 18 * len(lines) + 16)
 
-    def place(node: MindNode, depth: int) -> tuple[int, int]:
-        nonlocal next_leaf_y
-        width, height = measure(node)
-        if not node.children:
-            cy = next_leaf_y + height // 2
-            next_leaf_y += height + 20
-        else:
-            child_centers = [place(child, depth + 1)[1] for child in node.children]
-            cy = (child_centers[0] + child_centers[-1]) // 2
-        x = 32 + depth * 240
-        boxes[id(node)] = (x, cy - height // 2, width, height, node.label)
-        return x, cy
-
-    place(root, 0)
-    max_x = max(box[0] + box[2] for box in boxes.values())
-    max_y = max(box[1] + box[3] for box in boxes.values())
-    image = Image.new("RGB", (max(PAGE_W, max_x + 48), max(max_y + 48, 200)), (255, 255, 255))
+    placed = layout_mindmap(root, PAGE_W - 48, measure, balanced=False)
+    title_h = 48
+    image = Image.new("RGB", (max(placed.width + 24, 400), max(placed.height + title_h + 28, 200)), (255, 255, 255))
     canvas = ImageDraw.Draw(image)
-    canvas.text((24, 20), title, font=title_font, fill=(31, 31, 31))
-
-    def connect(node: MindNode) -> None:
-        parent = boxes[id(node)]
-        px, py, pw, ph, _label = parent
-        for child in node.children:
-            cx, cy, _cw, ch, _cl = boxes[id(child)]
-            canvas.line((px + pw, py + ph // 2, cx, cy + ch // 2), fill=(165, 180, 200), width=2)
-            connect(child)
-
-    connect(root)
-    for index, node_id in enumerate(boxes):
-        x, y, width, height, label = boxes[node_id]
+    canvas.text((24, 16), title, font=title_font, fill=(31, 31, 31))
+    for edge in placed.edges:
+        canvas.line(
+            (edge.x1 + 12, edge.y1 + title_h, edge.x2 + 12, edge.y2 + title_h),
+            fill=(165, 180, 200),
+            width=2,
+        )
+    for index, box in enumerate(placed.boxes):
+        x = int(box.x + 12)
+        y = int(box.y + title_h)
         fill = FILLS[index % len(FILLS)]
-        canvas.rounded_rectangle((x, y, x + width, y + height), 10, fill=fill, outline=(37, 99, 235))
-        lines = _wrap(canvas, label, node_font, max(width - 16, 40)) or [label]
+        canvas.rounded_rectangle((x, y, x + box.w, y + box.h), 10, fill=fill, outline=(37, 99, 235))
+        lines = _wrap(canvas, box.label, node_font, max(box.w - 16, 40)) or [box.label]
         cursor = y + 8
         for line in lines:
             canvas.text((x + 12, cursor), line, font=node_font, fill=(31, 31, 31))

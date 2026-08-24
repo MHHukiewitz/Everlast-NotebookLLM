@@ -30,12 +30,22 @@ async def erase_notebook(session: AsyncSession, notebook: Notebook) -> None:
     await session.delete(notebook)
 
 
+def notebook_defaults() -> dict:
+    image_provider = settings.default_image_provider
+    return {
+        "provider": settings.default_provider,
+        "model_id": settings.default_model,
+        "image_provider": image_provider,
+        "image_model": settings.default_image_model,
+        "openrouter_notice_accepted": image_provider == "openrouter",
+    }
+
+
 async def create_empty_notebook(session: AsyncSession, tenant_id: str) -> Notebook:
     notebook = Notebook(
         tenant_id=tenant_id,
         title=UNTITLED_TITLE,
-        provider=settings.default_provider,
-        model_id=settings.default_model,
+        **notebook_defaults(),
     )
     session.add(notebook)
     await session.flush()

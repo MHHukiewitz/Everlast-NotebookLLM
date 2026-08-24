@@ -52,7 +52,7 @@ class NotebookOut(BaseModel):
 
 class NotebookUpdate(BaseModel):
     title: str | None = None
-    provider: Literal["ollama", "eu", "openrouter"] | None = None
+    provider: Literal["ollama", "hetzner", "eu", "openrouter"] | None = None
     model_id: str | None = None
     tts_provider: Literal["local", "eu", "openrouter"] | None = None
     tts_model: str | None = None
@@ -229,7 +229,7 @@ class UserOut(BaseModel):
 
 
 class EvalStartIn(BaseModel):
-    provider: Literal["ollama", "eu", "openrouter"] = "ollama"
+    provider: Literal["ollama", "hetzner", "eu", "openrouter"] = "ollama"
     model_id: str = "qwen2.5:7b"
 
 

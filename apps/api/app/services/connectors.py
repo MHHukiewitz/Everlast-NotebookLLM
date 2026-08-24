@@ -15,6 +15,14 @@ def _label(model_id: str) -> str:
     return model_id.split("/")[-1]
 
 
+def _hetzner_label(model_id: str) -> str:
+    if "3.6" in model_id:
+        return "Qwen3.6 35B"
+    if "3.8" in model_id:
+        return "Qwen3.8 27B"
+    return _label(model_id)
+
+
 class ModelRouter:
     def list_providers(self) -> list[ProviderStatus]:
         ollama_models = [
@@ -25,6 +33,11 @@ class ModelRouter:
                 available=True,
                 notice=None,
             )
+        ]
+        hetzner_ready = bool(settings.hetzner_api_key)
+        hetzner_models = [
+            ModelCard(id=model_id, label=_hetzner_label(model_id), provider="hetzner", available=hetzner_ready)
+            for model_id in _csv(settings.hetzner_models)
         ]
         eu_models = [
             ModelCard(id=model_id, label=_label(model_id), provider="eu", available=True)
@@ -41,6 +54,17 @@ class ModelRouter:
                 available=True,
                 notice="Daten bleiben auf diesem Rechner.",
                 models=ollama_models,
+            ),
+            ProviderStatus(
+                id="hetzner",
+                label="Hetzner",
+                available=hetzner_ready,
+                notice=(
+                    "Server in der EU. DSGVO-konform. In der Regel schneller als lokale Modelle."
+                    if hetzner_ready
+                    else "HETZNER_API_KEY fehlt."
+                ),
+                models=hetzner_models,
             ),
             ProviderStatus(
                 id="eu",
@@ -73,6 +97,20 @@ class ModelRouter:
                 "model": f"ollama/{model_id.removeprefix('ollama/')}",
                 "api_base": settings.ollama_api_base,
                 "extra_headers": {},
+            }
+        if provider == "hetzner":
+            if not settings.hetzner_api_key:
+                raise ValueError("Hetzner Inference ist nicht konfiguriert.")
+            allow = set(_csv(settings.hetzner_models))
+            if allow and model_id not in allow:
+                raise ValueError("Dieses Modell steht auf der Hetzner-Allowlist nicht.")
+            return {
+                "model": model_id,
+                "custom_llm_provider": "openai",
+                "api_base": settings.hetzner_api_base,
+                "api_key": settings.hetzner_api_key,
+                "extra_headers": {},
+                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
             }
         if provider == "eu":
             if not settings.eu_llm_base_url or not settings.eu_llm_api_key:
@@ -120,6 +158,10 @@ class ModelRouter:
             kwargs["api_base"] = route["api_base"]
         if "api_key" in route:
             kwargs["api_key"] = route["api_key"]
+        if route.get("custom_llm_provider"):
+            kwargs["custom_llm_provider"] = route["custom_llm_provider"]
+        if route.get("extra_body"):
+            kwargs["extra_body"] = route["extra_body"]
         if route["extra_headers"]:
             kwargs["extra_headers"] = route["extra_headers"]
         if tools:
@@ -146,6 +188,10 @@ class ModelRouter:
             kwargs["api_base"] = route["api_base"]
         if "api_key" in route:
             kwargs["api_key"] = route["api_key"]
+        if route.get("custom_llm_provider"):
+            kwargs["custom_llm_provider"] = route["custom_llm_provider"]
+        if route.get("extra_body"):
+            kwargs["extra_body"] = route["extra_body"]
         if route["extra_headers"]:
             kwargs["extra_headers"] = route["extra_headers"]
         if tools:

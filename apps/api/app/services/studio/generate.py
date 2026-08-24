@@ -68,7 +68,9 @@ def _host_open(url: str) -> bool:
 
 def require_provider(notebook: Notebook) -> None:
     if notebook.provider == "ollama" and not _host_open(settings.ollama_api_base):
-        raise ValueError("Ollama ist nicht erreichbar. Starte Ollama oder wähle OpenRouter in den Einstellungen.")
+        raise ValueError("Ollama ist nicht erreichbar. Starte Ollama oder wähle Hetzner in den Einstellungen.")
+    if notebook.provider == "hetzner" and not settings.hetzner_api_key:
+        raise ValueError("HETZNER_API_KEY fehlt.")
     if notebook.provider == "openrouter" and not settings.openrouter_api_key:
         raise ValueError("OPENROUTER_API_KEY fehlt.")
     if notebook.provider == "eu" and not (settings.eu_llm_base_url and settings.eu_llm_api_key):

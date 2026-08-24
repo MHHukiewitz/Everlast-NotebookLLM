@@ -66,6 +66,35 @@ body {
   }
 }
 
+.trace-title {
+  @apply mb-2 text-xs font-medium text-neutral-500;
+}
+
+.trace-list {
+  @apply m-0 list-none space-y-2 p-0;
+}
+
+.trace-item {
+  @apply flex items-start gap-2 text-sm text-neutral-600;
+}
+
+.trace-node {
+  @apply mt-1.5 h-2 w-2 shrink-0 rounded-full bg-neutral-300;
+}
+
+.trace-node.is-running {
+  @apply bg-accent;
+  animation: thinking 1s infinite ease-in-out;
+}
+
+.trace-think {
+  @apply mt-2 text-xs text-neutral-500;
+}
+
+.trace-think summary {
+  @apply cursor-pointer text-neutral-500;
+}
+
 .md-body {
   @apply text-sm leading-relaxed text-neutral-800;
 }

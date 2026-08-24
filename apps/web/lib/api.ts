@@ -121,7 +121,7 @@ export type GenerationLog = {
   prompt: string;
   raw_output: string;
   visible_output: string;
-  reasoning: string[];
+  reasoning: unknown[];
   tool_calls: unknown[];
   extra: Record<string, unknown>;
   latency_ms: number;

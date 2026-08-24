@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.db import get_session
 from app.deps import current_tenant, current_user, owned_notebook
 from app.models import AuditEvent, Notebook, User
@@ -10,6 +9,7 @@ from app.schemas import ModalitiesOut, NotebookOut, NotebookUpdate, ProviderStat
 from app.services.autoname import UNTITLED_TITLE
 from app.services.connectors import router as model_router
 from app.services.modalities import list_modalities
+from app.services.tenancy import notebook_defaults
 
 api = APIRouter(prefix="/api")
 
@@ -31,8 +31,7 @@ async def create_notebook(
     notebook = Notebook(
         tenant_id=tenant,
         title=UNTITLED_TITLE,
-        provider=settings.default_provider,
-        model_id=settings.default_model,
+        **notebook_defaults(),
     )
     session.add(notebook)
     await session.commit()

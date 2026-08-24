@@ -148,23 +148,36 @@ def concat_mp3(clips: list[Path], dest: Path) -> None:
     )
 
 
+def image_request(provider: str, model_id: str, prompt: str) -> tuple[str, dict[str, Any], dict[str, str]]:
+    route = resolve_media("image", provider, model_id)
+    if provider == "openrouter":
+        return (
+            f"{route['api_base']}/images",
+            {"model": route["model"], "prompt": prompt, "aspect_ratio": "16:9", "n": 1},
+            route["headers"],
+        )
+    return (
+        f"{route['api_base']}/images/generations",
+        {
+            "model": route["model"],
+            "prompt": prompt,
+            "size": "1280x720",
+            "n": 1,
+            "response_format": "b64_json",
+        },
+        route["headers"],
+    )
+
+
 def generate_image(notebook: Notebook, prompt: str) -> bytes | None:
     if not image_ready(notebook):
         return None
-    route = resolve_media("image", notebook.image_provider, notebook.image_model)
+    url, payload, headers = image_request(notebook.image_provider, notebook.image_model, prompt)
     with httpx.Client(timeout=120.0) as client:
-        response = client.post(
-            f"{route['api_base']}/images/generations",
-            headers=route["headers"],
-            json={
-                "model": route["model"],
-                "prompt": prompt,
-                "size": "1280x720",
-                "n": 1,
-                "response_format": "b64_json",
-            },
-        )
+        response = client.post(url, headers=headers, json=payload)
     if response.status_code >= 400:
+        if notebook.image_provider == "openrouter":
+            raise ValueError(f"OpenRouter Bildmodell antwortete mit {response.status_code}.")
         return None
     body = response.json()
     items = body.get("data") or []
