@@ -4,7 +4,17 @@ import pytest
 
 from app.services.modalities import require_tts, tts_language_code
 from app.services.studio.audio import SYSTEM_BRIEFING, SYSTEM_EXPLAINER, _language_label
-from app.services.studio.media import GERMAN_SPEECH_STYLE, OPENAI_TO_PIPER, speech_payload, speech_style, voice_for
+from app.services.studio.media import (
+    GERMAN_SPEECH_STYLE,
+    OPENAI_TO_PIPER,
+    OPENAI_TTS_VOICES,
+    media_progress,
+    openai_tts_voice,
+    speech_payload,
+    speech_request,
+    speech_style,
+    voice_for,
+)
 
 
 def test_tts_language_defaults_to_german() -> None:
@@ -75,8 +85,38 @@ def test_openrouter_german_payload_sets_style() -> None:
     assert payload["model"] == "openai/gpt-4o-mini-tts"
     assert payload["voice"] == "alloy"
     assert payload["input"] == "Guten Tag. Dies ist eine kurze Prüfung."
-    assert payload["instructions"] == GERMAN_SPEECH_STYLE
+    assert "instructions" not in payload
+    assert payload["provider"]["options"]["openai"]["instructions"] == GERMAN_SPEECH_STYLE
     assert "Deutsch" in speech_style("de")
+
+
+def test_openrouter_german_speech_request_rejects_piper_voice(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.studio.media.settings.tts_voice_a", "alloy")
+    monkeypatch.setattr("app.services.studio.media.settings.tts_voice_a_en", "alloy")
+    route = {
+        "provider": "openrouter",
+        "model": "openai/gpt-4o-mini-tts",
+        "api_base": "https://openrouter.ai/api/v1",
+        "headers": {"Authorization": "Bearer test"},
+    }
+    voice = voice_for("A", "de")
+    assert voice == "de_DE-thorsten-medium"
+    url, _headers, body = speech_request(route, "Guten Tag. Dies ist eine kurze Prüfung.", voice, "de")
+    assert url == "https://openrouter.ai/api/v1/audio/speech"
+    assert body["voice"] == "alloy"
+    assert body["voice"] in OPENAI_TTS_VOICES
+    assert "de_DE" not in body["voice"]
+    assert "instructions" not in body
+    assert body["response_format"] == "mp3"
+    assert body["provider"]["options"]["openai"]["instructions"] == GERMAN_SPEECH_STYLE
+    assert openai_tts_voice("de_DE-thorsten-medium") == "alloy"
+    assert voice_for("A", "de", provider="openrouter") == "alloy"
+
+
+def test_media_progress_names_scene_and_step() -> None:
+    assert media_progress("video", 2, 8, "Sprache wird erzeugt") == "Szene 2/8: Sprache wird erzeugt"
+    assert media_progress("audio", 1, 6, "Sprache wird erzeugt") == "Absatz 1/6: Sprache wird erzeugt"
+    assert media_progress("video", 0, 8, "Skript fertig. Sprache startet…") == "Skript fertig. Sprache startet…"
 
 
 def test_local_allowlist_always_includes_piper(monkeypatch: pytest.MonkeyPatch) -> None:

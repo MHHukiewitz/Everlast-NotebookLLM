@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import settings
 from app.db import SessionLocal
@@ -93,6 +94,22 @@ def _duration(path: Path) -> float:
 
 GERMAN_SPEECH_STYLE = "Sprich klar und natürlich auf Deutsch. Kein Englisch."
 ENGLISH_SPEECH_STYLE = "Speak clearly and naturally in English."
+OPENAI_TTS_VOICES = frozenset(
+    {
+        "alloy",
+        "ash",
+        "ballad",
+        "coral",
+        "echo",
+        "fable",
+        "nova",
+        "onyx",
+        "shimmer",
+        "verse",
+        "marin",
+        "cedar",
+    }
+)
 OPENAI_TO_PIPER = {
     "alloy": "de_DE-thorsten-medium",
     "echo": "de_DE-thorsten-medium",
@@ -103,10 +120,33 @@ OPENAI_TO_PIPER = {
 }
 
 
+def media_progress(kind: str, index: int, total: int, step: str) -> str:
+    if index <= 0:
+        return step
+    label = "Szene" if kind == "video" else "Absatz"
+    return f"{label} {index}/{total}: {step}"
+
+
+async def save_media_payload(session: AsyncSession, artifact: Artifact, **updates: Any) -> None:
+    payload = dict(artifact.payload or {})
+    payload.update(updates)
+    artifact.payload = payload
+    flag_modified(artifact, "payload")
+    await session.commit()
+
+
 def speech_style(language: str | None) -> str:
     if tts_language_code(language) == "en":
         return ENGLISH_SPEECH_STYLE
     return GERMAN_SPEECH_STYLE
+
+
+def openai_tts_voice(voice: str) -> str:
+    if voice in OPENAI_TTS_VOICES:
+        return voice
+    if "kerstin" in voice:
+        return settings.tts_voice_b_en if settings.tts_voice_b_en in OPENAI_TTS_VOICES else "nova"
+    return settings.tts_voice_a_en if settings.tts_voice_a_en in OPENAI_TTS_VOICES else "alloy"
 
 
 def speech_payload(route: dict[str, Any], text: str, voice: str, language: str | None = "de") -> dict[str, Any]:
@@ -116,9 +156,21 @@ def speech_payload(route: dict[str, Any], text: str, voice: str, language: str |
         "voice": voice,
         "response_format": "mp3",
     }
-    if route.get("provider") == "openrouter":
-        payload["instructions"] = speech_style(language)
+    if route.get("provider") != "openrouter":
+        return payload
+    payload["voice"] = openai_tts_voice(voice)
+    payload["provider"] = {"options": {"openai": {"instructions": speech_style(language)}}}
     return payload
+
+
+def speech_request(
+    route: dict[str, Any], text: str, voice: str, language: str | None = "de"
+) -> tuple[str, dict[str, str], dict[str, Any]]:
+    return (
+        f"{route['api_base']}/audio/speech",
+        dict(route.get("headers") or {}),
+        speech_payload(route, text, voice, language),
+    )
 
 
 def wav_to_mp3(wav: Path) -> bytes:
@@ -154,22 +206,21 @@ def speak(notebook: Notebook, text: str, voice: str, language: str | None = "de"
     route = require_tts(notebook, language)
     if route.get("model") == "piper":
         return speak_piper(text, voice)
+    url, headers, payload = speech_request(route, text, voice, language)
     with httpx.Client(timeout=120.0) as client:
-        response = client.post(
-            f"{route['api_base']}/audio/speech",
-            headers=route["headers"],
-            json=speech_payload(route, text, voice, language),
-        )
+        response = client.post(url, headers=headers, json=payload)
     if response.status_code >= 400:
-        raise ValueError(f"Sprachmodell antwortete mit {response.status_code}.")
+        detail = (response.text or "").strip().replace("\n", " ")[:180]
+        suffix = f" {detail}" if detail else ""
+        raise ValueError(f"Sprachmodell antwortete mit {response.status_code}.{suffix}")
     if not response.content:
         raise ValueError("Das Sprachmodell lieferte keine Audiodatei.")
     return response.content
 
 
-def voice_for(speaker: str, language: str | None = "de") -> str:
+def voice_for(speaker: str, language: str | None = "de", provider: str | None = None) -> str:
     secondary = str(speaker).strip().upper() in {"B", "2"}
-    if tts_language_code(language) == "en":
+    if provider in {"openrouter", "eu"} or tts_language_code(language) == "en":
         return settings.tts_voice_b_en if secondary else settings.tts_voice_a_en
     raw = settings.tts_voice_b if secondary else settings.tts_voice_a
     return OPENAI_TO_PIPER.get(raw, raw)
@@ -414,6 +465,19 @@ async def synthesize_media(session: AsyncSession, artifact_id: uuid.UUID) -> Non
         await synthesize_video(session, notebook, artifact)
 
 
+async def mark_media_error(artifact_id: uuid.UUID, message: str) -> None:
+    async with SessionLocal() as session:
+        artifact = await session.get(Artifact, artifact_id)
+        if artifact is None:
+            return
+        await save_media_payload(session, artifact, status="error", progress=message)
+
+
 async def synthesize_media_isolated(artifact_id: uuid.UUID) -> None:
     async with SessionLocal() as session:
-        await synthesize_media(session, artifact_id)
+        try:
+            await synthesize_media(session, artifact_id)
+            return
+        except Exception as exc:
+            message = str(exc)
+    await mark_media_error(artifact_id, message)

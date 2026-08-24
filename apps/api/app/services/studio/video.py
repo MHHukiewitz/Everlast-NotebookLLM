@@ -1,7 +1,6 @@
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Artifact, Notebook
 from app.services.modalities import require_tts, tts_language_code
@@ -12,7 +11,9 @@ from app.services.studio.media import (
     hold_durations,
     join_video,
     media_file,
+    media_progress,
     require_ffmpeg,
+    save_media_payload,
     speak,
     voice_for,
     write_frame,
@@ -105,12 +106,14 @@ async def create_video(
     payload["language"] = language_code
     payload["style"] = style
     payload["status"] = "ready" if EVAL_MODE.get() else "pending"
+    if payload["status"] == "pending":
+        payload["progress"] = "Skript fertig. Sprache startet…"
     return await save_artifact(session, notebook, "studio.video", "video", title, payload)
 
 
 async def synthesize_video(session: AsyncSession, notebook: Notebook, artifact: Artifact) -> None:
     language = tts_language_code(str((artifact.payload or {}).get("language") or "de"))
-    require_tts(notebook, language)
+    route = require_tts(notebook, language)
     require_ffmpeg()
     scenes = artifact.payload.get("scenes") or []
     style = str(artifact.payload.get("style") or "auto")
@@ -118,25 +121,32 @@ async def synthesize_video(session: AsyncSession, notebook: Notebook, artifact: 
     work.mkdir(parents=True, exist_ok=True)
     clips = []
     stills: list[Any] = []
-    for index, scene in enumerate(scenes):
+    total = len(scenes)
+    voice = voice_for("A", language, provider=route.get("provider"))
+    for index, scene in enumerate(scenes, start=1):
         heading = str(scene.get("heading") or "")
         bullets = [str(item) for item in scene.get("bullets") or []]
         narration = str(scene.get("narration") or "").strip() or heading
-        clip = work / f"{index:03d}.mp3"
-        clip.write_bytes(speak(notebook, narration, voice_for("A", language), language))
+        await save_media_payload(
+            session, artifact, status="pending", progress=media_progress("video", index, total, "Sprache wird erzeugt")
+        )
+        clip = work / f"{index - 1:03d}.mp3"
+        clip.write_bytes(speak(notebook, narration, voice, language))
         clips.append(clip)
-        frame = work / f"{index:03d}.png"
+        await save_media_payload(
+            session, artifact, status="pending", progress=media_progress("video", index, total, "Bild wird erzeugt")
+        )
+        frame = work / f"{index - 1:03d}.png"
         write_frame(notebook, heading, bullets, style, frame)
         stills.append(frame)
     if not clips:
         raise ValueError("Die Video-Szenen haben keinen Text.")
+    await save_media_payload(session, artifact, status="pending", progress="Audio wird verbunden")
     audio = work / "narration.mp3"
     concat_mp3(clips, audio)
     dest = media_file(notebook.id, artifact.id, "mp4")
+    await save_media_payload(session, artifact, status="pending", progress="Video wird geschnitten")
     join_video(list(zip(stills, hold_durations(clips))), audio, dest)
-    payload = dict(artifact.payload or {})
-    payload["status"] = "ready"
-    payload["video_path"] = str(dest)
-    artifact.payload = payload
-    flag_modified(artifact, "payload")
-    await session.commit()
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise ValueError("Die Videodatei ist unvollständig.")
+    await save_media_payload(session, artifact, status="ready", progress="", video_path=str(dest))

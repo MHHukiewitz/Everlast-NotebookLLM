@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { CiteText, StudioCiteLinks, type StudioCiteProps } from "@/components/CiteText";
 import { api } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { mediaIsBusy, mediaIsFailed, mediaIsReady, mediaStatusLabel } from "@/lib/mediaStatus";
 import type { AudioTurn } from "@/lib/types";
 
 export function AudioView({
@@ -11,6 +12,7 @@ export function AudioView({
   artifactId,
   turns,
   status,
+  progress,
   citations,
   onCite,
 }: {
@@ -18,10 +20,11 @@ export function AudioView({
   artifactId: string;
   turns: AudioTurn[];
   status?: string;
+  progress?: string;
 } & StudioCiteProps) {
   const [src, setSrc] = useState("");
   useEffect(() => {
-    if (status !== "ready") return;
+    if (!mediaIsReady(status)) return;
     let objectUrl = "";
     let cancelled = false;
     fetch(api.artifactMediaUrl(notebookId, artifactId), { credentials: "include" })
@@ -39,8 +42,12 @@ export function AudioView({
   }, [artifactId, notebookId, status]);
   return (
     <div className="text-xs">
-      {status === "pending" && <p className="mb-2 text-neutral-500">{t.mediaPending}</p>}
-      {src && <audio className="mb-2 w-full" controls src={src} />}
+      {(mediaIsBusy(status) || mediaIsFailed(status)) && (
+        <p className={`mb-2 ${mediaIsFailed(status) ? "text-red-600" : "text-neutral-500"}`}>
+          {mediaStatusLabel(status, progress, t.mediaPending, t.mediaFailed)}
+        </p>
+      )}
+      {mediaIsReady(status) && src && <audio className="mb-2 w-full" controls src={src} />}
       <ol className="space-y-2 text-neutral-700">
         {turns.map((turn, index) => (
           <li key={index}>

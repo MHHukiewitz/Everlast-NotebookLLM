@@ -82,6 +82,8 @@ export const t = {
   mediaFocus: "Worauf sollen sich die KI-Moderatoren konzentrieren?",
   mediaCreate: "Erstellen",
   mediaPending: "Sprache und Datei werden erzeugt…",
+  mediaFailed: "Erzeugung fehlgeschlagen.",
+  mediaNotReady: "Die Datei ist noch nicht fertig.",
   customizeAudio: "Audio-Zusammenfassung anpassen",
   customizeVideo: "Video-Zusammenfassung anpassen",
   downloadSvg: "SVG laden",

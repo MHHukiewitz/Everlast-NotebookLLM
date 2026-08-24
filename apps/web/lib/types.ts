@@ -155,6 +155,7 @@ export type ArtifactPayload = {
   turns?: AudioTurn[];
   scenes?: VideoScene[];
   status?: string;
+  progress?: string;
   audio_path?: string;
   video_path?: string;
 };

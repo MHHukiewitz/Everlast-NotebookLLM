@@ -5,6 +5,7 @@ import { StudioCiteLinks } from "@/components/CiteText";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { api } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { mediaIsBusy, mediaIsFailed, mediaIsReady, mediaStatusLabel } from "@/lib/mediaStatus";
 import { artifactCitationMap } from "@/lib/studioCitations";
 import type { Artifact, MessageCitation, Source } from "@/lib/types";
 import { AudioView } from "./AudioView";
@@ -67,6 +68,11 @@ export function ArtifactCard({
   const [saveError, setSaveError] = useState("");
   const formats = EXPORTS[artifact.type] || [];
   const citations = artifactCitationMap(artifact.payload || {}, sources);
+  const mediaType = artifact.type === "audio" || artifact.type === "video";
+  const mediaReady = !mediaType || mediaIsReady(artifact.payload.status);
+  const mediaBusy = mediaType && mediaIsBusy(artifact.payload.status);
+  const mediaFailed = mediaType && mediaIsFailed(artifact.payload.status);
+  const mediaLabel = mediaStatusLabel(artifact.payload.status, artifact.payload.progress, t.mediaPending, t.mediaFailed);
   if (loading) {
     return (
       <li className="rounded-lg border border-accent bg-mist p-3">
@@ -111,6 +117,14 @@ export function ArtifactCard({
           <div className="font-medium">{artifact.title}</div>
           <div className="text-[11px] uppercase tracking-wide text-neutral-400">{artifact.type}</div>
           {!open && <p className="mt-1 line-clamp-4 text-xs text-neutral-600">{preview(artifact)}</p>}
+          {(mediaBusy || mediaFailed) && (
+            <p className={`mt-1 flex items-center gap-2 text-xs ${mediaFailed ? "text-red-600" : "text-neutral-500"}`}>
+              {mediaBusy && (
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-neutral-300 border-t-accent" />
+              )}
+              {mediaLabel}
+            </p>
+          )}
         </button>
         <button
           className="mt-0.5 shrink-0 px-1 text-neutral-400 hover:text-red-600"
@@ -179,6 +193,7 @@ export function ArtifactCard({
               artifactId={artifact.id}
               turns={artifact.payload.turns || []}
               status={artifact.payload.status}
+              progress={artifact.payload.progress}
               citations={citations}
               onCite={onCite}
             />
@@ -189,6 +204,7 @@ export function ArtifactCard({
               artifactId={artifact.id}
               scenes={artifact.payload.scenes || []}
               status={artifact.payload.status}
+              progress={artifact.payload.progress}
               citations={citations}
               onCite={onCite}
             />
@@ -196,21 +212,35 @@ export function ArtifactCard({
           {formats.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-1">
               <span className="text-[11px] text-neutral-400">{t.exportFile}</span>
-              {formats.map((format) => (
-                <a
-                  key={format}
-                  className="rounded border border-line px-1.5 py-0.5 text-[11px] uppercase hover:bg-mist"
-                  href={api.artifactExportUrl(notebookId, artifact.id, format)}
-                >
-                  {format}
-                </a>
-              ))}
+              {formats.map((format) => {
+                const fileExport = format === "mp3" || format === "mp4";
+                if (fileExport && !mediaReady) {
+                  return (
+                    <span
+                      key={format}
+                      className="rounded border border-line px-1.5 py-0.5 text-[11px] uppercase text-neutral-400"
+                      title={t.mediaNotReady}
+                    >
+                      {format}
+                    </span>
+                  );
+                }
+                return (
+                  <a
+                    key={format}
+                    className="rounded border border-line px-1.5 py-0.5 text-[11px] uppercase hover:bg-mist"
+                    href={api.artifactExportUrl(notebookId, artifact.id, format)}
+                  >
+                    {format}
+                  </a>
+                );
+              })}
             </div>
           )}
           <div className="mt-3">
             <button
               className="rounded border border-line px-1.5 py-0.5 text-[11px] hover:bg-mist disabled:opacity-60"
-              disabled={saving || saved}
+              disabled={saving || saved || !mediaReady}
               onClick={addAsSource}
               type="button"
             >

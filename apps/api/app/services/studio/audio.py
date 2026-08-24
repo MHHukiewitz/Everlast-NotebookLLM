@@ -1,12 +1,11 @@
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Artifact, Notebook
 from app.services.modalities import require_tts, tts_language_code
 from app.services.studio.generate import EVAL_MODE, STUDIO_USER, generate_json, save_artifact, source_ids_from_args, topic_from_args
-from app.services.studio.media import artifact_dir, concat_mp3, media_file, speak, voice_for
+from app.services.studio.media import artifact_dir, concat_mp3, media_file, media_progress, save_media_payload, speak, voice_for
 
 FILLER = "unser ziel ist es"
 
@@ -97,31 +96,34 @@ async def create_audio(
     payload["format"] = fmt
     payload["language"] = language_code
     payload["status"] = "ready" if EVAL_MODE.get() else "pending"
+    if payload["status"] == "pending":
+        payload["progress"] = "Skript fertig. Sprache startet…"
     return await save_artifact(session, notebook, "studio.audio", "audio", title, payload)
 
 
 async def synthesize_audio(session: AsyncSession, notebook: Notebook, artifact: Artifact) -> None:
     language = tts_language_code(str((artifact.payload or {}).get("language") or "de"))
-    require_tts(notebook, language)
+    route = require_tts(notebook, language)
     turns = artifact.payload.get("turns") or []
     work = artifact_dir(notebook.id) / f"{artifact.id}-clips"
     work.mkdir(parents=True, exist_ok=True)
     clips = []
-    voice = voice_for("A", language)
-    for index, turn in enumerate(turns):
+    voice = voice_for("A", language, provider=route.get("provider"))
+    spoken = [turn for turn in turns if str((turn or {}).get("text") or "").strip()]
+    total = len(spoken)
+    for index, turn in enumerate(spoken, start=1):
         text = str(turn.get("text") or "").strip()
-        if not text:
-            continue
-        clip = work / f"{index:03d}.mp3"
+        await save_media_payload(
+            session, artifact, status="pending", progress=media_progress("audio", index, total, "Sprache wird erzeugt")
+        )
+        clip = work / f"{index - 1:03d}.mp3"
         clip.write_bytes(speak(notebook, text, voice, language))
         clips.append(clip)
     if not clips:
         raise ValueError("Das Audio-Skript hat keinen Text.")
     dest = media_file(notebook.id, artifact.id, "mp3")
+    await save_media_payload(session, artifact, status="pending", progress="Audio wird verbunden")
     concat_mp3(clips, dest)
-    payload = dict(artifact.payload or {})
-    payload["status"] = "ready"
-    payload["audio_path"] = str(dest)
-    artifact.payload = payload
-    flag_modified(artifact, "payload")
-    await session.commit()
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise ValueError("Die Audiodatei ist unvollständig.")
+    await save_media_payload(session, artifact, status="ready", progress="", audio_path=str(dest))
