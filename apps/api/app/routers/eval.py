@@ -1,15 +1,15 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.deps import current_tenant, current_user
-from app.models import EvalItem, EvalRun, GenerationLog, User
+from app.models import EvalItem, EvalRun, GenerationLog, Notebook, User
 from app.schemas import EvalItemOut, EvalRunOut, EvalStartIn, GenerationLogOut, HumanScoreIn
-from app.services.eval_harness import run_eval
+from app.services.eval_harness import EVAL_TITLE, run_eval_isolated
 
 api = APIRouter(prefix="/api/eval")
 
@@ -76,12 +76,40 @@ async def get_run(
 @api.post("/runs", response_model=EvalRunOut)
 async def start_run(
     body: EvalStartIn,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
     tenant: str = Depends(current_tenant),
 ) -> EvalRunOut:
-    run = await run_eval(session, body.provider, body.model_id, tenant)
-    items = list((await session.execute(select(EvalItem).where(EvalItem.run_id == run.id))).scalars())
-    return _run_out(run, items)
+    notebook = (
+        await session.execute(
+            select(Notebook).where(Notebook.tenant_id == tenant, Notebook.title == EVAL_TITLE)
+        )
+    ).scalar_one_or_none()
+    if notebook is None:
+        notebook = Notebook(
+            tenant_id=tenant,
+            title=EVAL_TITLE,
+            provider=body.provider,
+            model_id=body.model_id,
+        )
+        session.add(notebook)
+        await session.flush()
+    else:
+        notebook.provider = body.provider
+        notebook.model_id = body.model_id
+    run = EvalRun(
+        tenant_id=tenant,
+        notebook_id=notebook.id,
+        provider=body.provider,
+        model_id=body.model_id,
+        status="queued",
+        metrics={},
+    )
+    session.add(run)
+    await session.commit()
+    await session.refresh(run)
+    background_tasks.add_task(run_eval_isolated, run.id, body.provider, body.model_id, tenant)
+    return _run_out(run, [])
 
 
 @api.patch("/items/{item_id}", response_model=EvalItemOut)

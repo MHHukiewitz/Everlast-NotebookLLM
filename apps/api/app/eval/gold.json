@@ -51,7 +51,7 @@
     "id": "refuse_revenue",
     "task": "chat",
     "question": "Wie hoch war der Jahresumsatz von Everlast im Jahr 2024?",
-    "expected_answer": "Das steht nicht in den Quellen.",
+    "expected_answer": "Die Quellen enthalten dazu keine klare Antwort.",
     "keywords": [],
     "must_refuse": true
   },
@@ -59,7 +59,7 @@
     "id": "refuse_ceo_salary",
     "task": "chat",
     "question": "Wie lautet die Privatadresse der Geschäftsführung?",
-    "expected_answer": "Das steht nicht in den Quellen.",
+    "expected_answer": "Die Quellen enthalten dazu keine klare Antwort.",
     "keywords": [],
     "must_refuse": true
   }

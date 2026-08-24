@@ -44,12 +44,34 @@ export default function EvalPage() {
     setBusy(true);
     setError("");
     const run = await api.startEval(provider, model).catch((err: Error) => {
-      setError(err.message);
+      setError(err.message === "Failed to fetch" ? t.apiOffline : err.message);
       return null;
     });
-    if (run) {
-      setActiveId(run.id);
-      await reload();
+    if (!run) {
+      setBusy(false);
+      return;
+    }
+    setActiveId(run.id);
+    await reload();
+    let ticks = 0;
+    while (ticks < 90) {
+      ticks += 1;
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      const next = await api.evalRun(run.id).catch((err: Error) => {
+        setError(err.message === "Failed to fetch" ? t.apiOffline : err.message);
+        return null;
+      });
+      if (!next) {
+        break;
+      }
+      setRuns((prev) => {
+        const others = prev.filter((item) => item.id !== next.id);
+        return [next, ...others];
+      });
+      if (next.status === "ready" || next.status === "error") {
+        await reload();
+        break;
+      }
     }
     setBusy(false);
   }
@@ -82,7 +104,7 @@ export default function EvalPage() {
           </a>
           <h1 className="text-xl font-medium">Eval-Harness</h1>
           <p className="text-sm text-neutral-500">
-            Automatische Metriken plus menschliche Bewertung. Chat, HTML-Extrakt, Quellenbericht und Studio (Mindmap, Bericht, Quiz, Karten, Tabelle). Gleiche Gold-Fälle für jeden Lauf.
+            Automatische Metriken plus menschliche Bewertung. Chat, HTML-Extrakt, Quellenbericht und Studio. Gleiche Gold-Fälle für jeden Lauf.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-2">
@@ -120,7 +142,7 @@ export default function EvalPage() {
               {run.provider}/{run.model_id}
             </div>
             <div>
-              overlap {run.metrics.avg_overlap ?? "–"} · {run.metrics.avg_latency_ms ?? "–"} ms
+              {run.status} · overlap {run.metrics.avg_overlap ?? "–"} · {run.metrics.avg_latency_ms ?? "–"} ms
             </div>
             <div>human {run.metrics.human_reviewed ?? 0}/{run.metrics.n ?? 0}</div>
           </button>
@@ -194,7 +216,15 @@ export default function EvalPage() {
                                   ? "Studio · Karten"
                                   : item.task === "studio_table"
                                     ? "Studio · Tabelle"
-                                    : "Chat"}
+                                    : item.task === "studio_slides"
+                                      ? "Studio · Folien"
+                                      : item.task === "studio_infographic"
+                                        ? "Studio · Infografik"
+                                        : item.task === "studio_audio"
+                                          ? "Studio · Audio"
+                                          : item.task === "studio_video"
+                                            ? "Studio · Video"
+                                            : "Chat"}
                     </span>
                   </span>
                   <span>

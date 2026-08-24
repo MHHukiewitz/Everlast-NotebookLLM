@@ -8,11 +8,13 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db import SessionLocal
 from app.models import Artifact, EvalItem, EvalRun, Notebook, Source
 from app.services.chat_agent import run_chat
 from app.services.ingest import extract_html, write_chunks, write_model_summary
 from app.services.retrieve import overlap_score
 from app.services.skills import run_skill
+from app.services.studio.generate import EVAL_MODE
 
 GOLD_PATH = Path(__file__).resolve().parent.parent / "eval" / "gold.json"
 GOLD_SOURCES_PATH = Path(__file__).resolve().parent.parent / "eval" / "gold_sources.json"
@@ -30,7 +32,11 @@ REFUSE_MARKERS = (
     "keine informationen",
     "keine solchen",
     "kann keine",
+    "kann ich keine",
     "kann ich nicht",
+    "leider kann ich",
+    "keinen zugriff",
+    "nicht öffentlich",
     "es tut mir leid",
 )
 
@@ -176,6 +182,41 @@ def flatten_studio_payload(payload: dict[str, Any], artifact_type: str) -> str:
         return "\n".join(parts)
     if artifact_type == "note":
         return f"{title}\n{payload.get('body') or ''}"
+    if artifact_type == "slides":
+        parts = [title]
+        for slide in payload.get("slides") or []:
+            parts.append(str(slide.get("heading") or ""))
+            parts.extend(str(bullet) for bullet in slide.get("bullets") or [])
+            parts.append(str(slide.get("notes") or ""))
+        return "\n".join(parts)
+    if artifact_type == "infographic":
+        parts = [title]
+        for item in payload.get("items") or []:
+            parts.append(str(item.get("label") or ""))
+            parts.append(str(item.get("number") or ""))
+            parts.append(str(item.get("suffix") or ""))
+            parts.append(str(item.get("caption") or ""))
+            parts.append(str(item.get("value") or ""))
+            parts.append(str(item.get("detail") or ""))
+        for chart in payload.get("charts") or []:
+            parts.append(str(chart.get("title") or ""))
+            for point in chart.get("points") or []:
+                parts.append(str(point.get("label") or ""))
+                parts.append(str(point.get("value") or ""))
+        return "\n".join(parts)
+    if artifact_type == "audio":
+        parts = [title]
+        for turn in payload.get("turns") or []:
+            parts.append(str(turn.get("speaker") or ""))
+            parts.append(str(turn.get("text") or ""))
+        return "\n".join(parts)
+    if artifact_type == "video":
+        parts = [title]
+        for scene in payload.get("scenes") or []:
+            parts.append(str(scene.get("heading") or ""))
+            parts.extend(str(bullet) for bullet in scene.get("bullets") or [])
+            parts.append(str(scene.get("narration") or ""))
+        return "\n".join(parts)
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -217,6 +258,26 @@ def score_studio_output(
     if min_cards:
         count = len(payload.get("cards") or [])
         if count < min_cards:
+            scored["hit"] = scored["hit"] * 0.5
+    min_slides = int(case.get("min_slides") or 0)
+    if min_slides:
+        count = len(payload.get("slides") or [])
+        if count < min_slides:
+            scored["hit"] = scored["hit"] * 0.5
+    min_items = int(case.get("min_items") or 0)
+    if min_items:
+        count = len(payload.get("items") or [])
+        if count < min_items:
+            scored["hit"] = scored["hit"] * 0.5
+    min_turns = int(case.get("min_turns") or 0)
+    if min_turns:
+        count = len(payload.get("turns") or [])
+        if count < min_turns:
+            scored["hit"] = scored["hit"] * 0.5
+    min_scenes = int(case.get("min_scenes") or 0)
+    if min_scenes:
+        count = len(payload.get("scenes") or [])
+        if count < min_scenes:
             scored["hit"] = scored["hit"] * 0.5
     return scored
 
@@ -266,21 +327,42 @@ def score_source_output(
     }
 
 
-async def run_eval(session: AsyncSession, provider: str, model_id: str, tenant_id: str) -> EvalRun:
+async def run_eval_isolated(run_id: uuid.UUID, provider: str, model_id: str, tenant_id: str) -> None:
+    async with SessionLocal() as session:
+        run = await session.get(EvalRun, run_id)
+        if run is None:
+            return
+        await run_eval(session, provider, model_id, tenant_id, existing=run)
+
+
+async def run_eval(
+    session: AsyncSession,
+    provider: str,
+    model_id: str,
+    tenant_id: str,
+    existing: EvalRun | None = None,
+) -> EvalRun:
+    EVAL_MODE.set(True)
     notebook, gold_source, extract_source, summary_latency_ms = await ensure_eval_notebook(
         session, provider, model_id, tenant_id
     )
-    run = EvalRun(
-        tenant_id=tenant_id,
-        notebook_id=notebook.id,
-        provider=provider,
-        model_id=model_id,
-        status="running",
-        metrics={},
-    )
-    session.add(run)
-    await session.commit()
-    await session.refresh(run)
+    run = existing
+    if run is None:
+        run = EvalRun(
+            tenant_id=tenant_id,
+            notebook_id=notebook.id,
+            provider=provider,
+            model_id=model_id,
+            status="running",
+            metrics={},
+        )
+        session.add(run)
+        await session.commit()
+        await session.refresh(run)
+    else:
+        run.notebook_id = notebook.id
+        run.status = "running"
+        await session.commit()
     cases = load_gold()
     latencies: list[int] = []
     overlaps: list[float] = []
@@ -387,4 +469,5 @@ async def run_eval(session: AsyncSession, provider: str, model_id: str, tenant_i
     }
     await session.commit()
     await session.refresh(run)
+    EVAL_MODE.set(False)
     return run
