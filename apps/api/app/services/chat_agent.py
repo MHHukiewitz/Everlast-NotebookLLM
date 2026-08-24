@@ -28,11 +28,12 @@ SYSTEM = f"""Du bist Everlast Notebook, ein KI-System. Sage das klar.
 Antworte auf Deutsch in normaler Sprache.
 Beantworte zuerst die Frage. Schreibe nur wenige Sätze.
 Schreibe keine JSON-Werkzeugaufrufe in die Antwort.
+Lege keine Notiz an, um die Frage zu beantworten.
 Für Fakten nutze nur die ausgewählten Quellen im Kontext.
-Wenn der Quellenkontext die gefragte Tatsache nennt, musst du antworten. Nutze dann nicht: {NO_ANSWER}
-Wenn die Antwort nicht in den Quellen steht, antworte genau mit: {NO_ANSWER}
+Wenn der Quellenkontext relevante Fakten zur Frage enthält, musst du antworten. Verbinde Fakten aus mehreren Quellen. Nutze dann nicht: {NO_ANSWER}
+Wenn der Quellenkontext keine relevanten Fakten zur Frage enthält, antworte genau mit: {NO_ANSWER}
 Übernimm Werkzeug- und Methodennamen aus dem Kontext wörtlich: Ollama, BM25, Hybrid-Search, Langfuse.
-Erfinde keine Fakten.
+Erfinde keine Fakten, Zahlen, Namen oder Daten.
 Hänge Zitate in der Form [n] an Sätze an, wenn du eine Faktantwort gibst. n ist die Nummer im Quellenkontext.
 Schreibe keinen ganzen Architekturbericht, wenn die Frage kurz ist.
 Markiere generierten Text als KI-generiert, wenn du einen Bericht schreibst.
@@ -52,10 +53,6 @@ Hänge Zitate in der Form [n] an Sätze an, wenn du eine Faktantwort gibst. n is
 Markiere generierten Text als KI-generiert, wenn du einen Bericht schreibst.
 """
 
-_LEAKED_TOOL = re.compile(
-    r"\{[^{}]*\"name\"\s*:\s*\"([^\"]+)\"[^{}]*\"arguments\"\s*:\s*(\{(?:[^{}]*)\})[^{}]*\}",
-    re.DOTALL,
-)
 _TOOL_OBJECT_START = re.compile(r'\{\s*"name"\s*:')
 _TOOL_NAME_HOLD = re.compile(r'\{\s*"name"\s*:\s*"([^"]+)"')
 _DELETE_TARGET = re.compile(
@@ -154,18 +151,55 @@ def parse_tool_args(text: str) -> dict[str, Any] | None:
     return json.loads(raw)
 
 
+def _balanced_object(text: str, start: int) -> str:
+    if start >= len(text) or text[start] != "{":
+        return ""
+    depth = 0
+    in_str = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_str:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_str = False
+            continue
+        if char == '"':
+            in_str = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return ""
+
+
 def extract_leaked_tools(text: str) -> tuple[str, list[dict[str, str]]]:
     calls: list[dict[str, str]] = []
-
-    def take(match: re.Match[str]) -> str:
-        skill_id = resolve_tool_name(match.group(1))
-        if skill_id is None:
-            return ""
-        calls.append({"name": skill_id, "arguments": match.group(2)})
-        return ""
-
-    cleaned = _LEAKED_TOOL.sub(take, text)
-    cleaned = re.sub(r"```(?:json)?\s*```", "", cleaned)
+    parts: list[str] = []
+    index = 0
+    while index < len(text):
+        found = _TOOL_OBJECT_START.search(text, index)
+        if found is None:
+            parts.append(text[index:])
+            break
+        blob = _balanced_object(text, found.start())
+        if not blob:
+            parts.append(text[index:])
+            break
+        parts.append(text[index : found.start()])
+        parsed = parse_tool_args(blob)
+        name = parsed.get("name") if parsed else None
+        args = parsed.get("arguments") if parsed else None
+        skill_id = resolve_tool_name(str(name)) if name else None
+        if skill_id and (skill_id in CHAT_TOOLS or skill_id.startswith("research.")):
+            calls.append({"name": skill_id, "arguments": json.dumps(args or {}, ensure_ascii=False)})
+        index = found.start() + len(blob)
+    cleaned = re.sub(r"```(?:json)?\s*```", "", "".join(parts))
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip(), calls
 
 
@@ -415,7 +449,10 @@ async def run_chat(
         ).scalars()
         history = list(reversed(list(history_rows)))
         for item in history[:-1]:
-            messages.append({"role": item.role, "content": item.content})
+            content = item.content
+            if item.role == "assistant":
+                content, _leaks = extract_leaked_tools(content)
+            messages.append({"role": item.role, "content": content})
     messages.append({"role": "user", "content": user_text})
 
     offline = _provider_ready(notebook)
@@ -472,9 +509,25 @@ async def run_chat(
             break
         tools = _tools_for_prompt() if tools_enabled else None
 
+    assistant_text, _leaks = extract_leaked_tools(assistant_text)
+    if chunks and tools_enabled and not pending_job_id:
+        visible = assistant_text.strip()
+        if not visible or visible == NO_ANSWER:
+            retry_messages = [item for item in messages if item.get("role") == "system"]
+            retry_messages.append({"role": "user", "content": user_text})
+            retry_executed: list[dict[str, Any]] = []
+            assistant_text = ""
+            async for event in _stream_pass(session, notebook, retry_messages, None, retry_executed):
+                if event.get("event") == "token":
+                    piece = str(event.get("text") or "")
+                    assistant_text += piece
+                    raw_output += piece
+                yield event
+            assistant_text, _leaks = extract_leaked_tools(assistant_text)
+
     if tools_enabled and not pending_job_id:
         visible = assistant_text.strip()
-        thin = (not visible or visible == NO_ANSWER) and not is_smalltalk(user_text)
+        thin = (not visible or visible == NO_ANSWER) and not is_smalltalk(user_text) and not chunks
         if thin:
             async for event in _research_turn(
                 session,

@@ -1,3 +1,4 @@
+import asyncio
 import io
 import re
 import time
@@ -24,6 +25,19 @@ from app.services.tracing import pack_prompt, record_generation, start_trace
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _CITED_QUOTE = re.compile(r"\[(\d+)\]\s*[\"«„“](.+?)[\"»“”]", re.DOTALL)
 _BARE_URL = re.compile(r"https?://[^\s)>\]]+")
+_OUTER_FENCE = re.compile(r"^```(?:[a-zA-Z0-9_-]*)?\s*\n([\s\S]*?)\n```(?:\s*\n([\s\S]*))?$")
+
+
+def unwrap_markdown_fence(text: str) -> str:
+    text = text.replace("\r\n", "\n").strip()
+    match = _OUTER_FENCE.match(text)
+    if match is None:
+        return text
+    inner = (match.group(1) or "").strip()
+    after = (match.group(2) or "").strip()
+    if after:
+        return f"{inner}\n\n{after}"
+    return inner
 
 
 def _compact(text: str) -> str:
@@ -179,12 +193,16 @@ async def rebuild_embeddings(session: AsyncSession) -> int:
     return len(rows)
 
 
-async def write_chunks(session: AsyncSession, source: Source, text: str) -> None:
+async def write_chunks(session: AsyncSession, source: Source, text: str, embed: bool = True) -> None:
     await session.execute(delete(Chunk).where(Chunk.source_id == source.id))
     pieces = _chunk_text(text)
     if not pieces:
         return
-    vectors = embed_texts([piece[2] for piece in pieces])
+    vectors: list[list[float] | None]
+    if embed:
+        vectors = embed_texts([piece[2] for piece in pieces])
+    else:
+        vectors = [None] * len(pieces)
     for index, ((start, end, piece), vector) in enumerate(zip(pieces, vectors, strict=True)):
         session.add(
             Chunk(
@@ -199,6 +217,24 @@ async def write_chunks(session: AsyncSession, source: Source, text: str) -> None
                 embedding=vector,
             )
         )
+
+
+async def embed_source_isolated(source_id: uuid.UUID) -> None:
+    async with SessionLocal() as session:
+        chunks = list(
+            (
+                await session.execute(
+                    select(Chunk).where(Chunk.source_id == source_id).order_by(Chunk.ordinal)
+                )
+            ).scalars()
+        )
+        pending = [chunk for chunk in chunks if chunk.embedding is None]
+        if not pending:
+            return
+        vectors = await asyncio.to_thread(embed_texts, [chunk.text for chunk in pending])
+        for chunk, vector in zip(pending, vectors, strict=True):
+            chunk.embedding = vector
+        await session.commit()
 
 
 def build_source_report(title: str, text: str, origin: str | None) -> str:
@@ -226,6 +262,7 @@ async def write_model_summary(session: AsyncSession, source: Source, text: str) 
             "content": (
                 "Du bist Everlast Notebook, ein KI-System. "
                 "Schreibe einen Quellenbericht auf Deutsch als Markdown. "
+                "Gib den Bericht direkt aus. Setze keinen Codezaun (```) um den Bericht. "
                 "Nutze nur den gelieferten Quelltext. "
                 "Ein Zitat [1] darf nur ein wörtliches Teilstück des Quelltexts sein. "
                 "Setze keine Anführungszeichen um Sätze, die nicht wörtlich in der Quelle stehen. "
@@ -242,7 +279,7 @@ async def write_model_summary(session: AsyncSession, source: Source, text: str) 
     completion = await router.complete(notebook.provider, notebook.model_id, messages)
     latency_ms = int((time.perf_counter() - started) * 1000)
     body = completion.choices[0].message.content or ""
-    visible = ground_summary(body.strip(), text) if body.strip() else fallback
+    visible = unwrap_markdown_fence(ground_summary(body.strip(), text) if body.strip() else fallback)
     await record_generation(
         session,
         tenant_id=source.tenant_id,
@@ -277,6 +314,7 @@ async def finalize_source(
     text: str,
     citations: list[Citation] | None = None,
     use_model_summary: bool = True,
+    embed: bool = True,
 ) -> Source:
     source.content_md = text
     if use_model_summary:
@@ -285,7 +323,7 @@ async def finalize_source(
     else:
         source.summary_md = build_source_report(source.title, text, source.origin_uri)
     source.status = "ready"
-    await write_chunks(session, source, text)
+    await write_chunks(session, source, text, embed=embed)
     if citations:
         for citation in citations:
             session.add(citation)

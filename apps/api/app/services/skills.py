@@ -365,7 +365,6 @@ CHAT_TOOLS = [
     "sources.set_selected",
     "sources.delete",
     "sources.delete_matching",
-    "notes.create",
 ]
 
 

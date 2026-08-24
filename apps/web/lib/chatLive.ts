@@ -72,6 +72,53 @@ export function applyChatEvent(parts: LivePart[], event: Record<string, unknown>
   return parts;
 }
 
+function takeJsonObject(text: string, start: number): string {
+  if (text[start] !== "{") return "";
+  let depth = 0;
+  let inStr = false;
+  let escape = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inStr) {
+      if (escape) escape = false;
+      else if (char === "\\") escape = true;
+      else if (char === '"') inStr = false;
+      continue;
+    }
+    if (char === '"') inStr = true;
+    else if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+  return "";
+}
+
+export function visibleChatText(text: string): string {
+  if (!text) return "";
+  let out = "";
+  let index = 0;
+  const startRe = /\{\s*"name"\s*:/;
+  while (index < text.length) {
+    const rest = text.slice(index);
+    const match = rest.search(startRe);
+    if (match < 0) {
+      out += rest;
+      break;
+    }
+    out += rest.slice(0, match);
+    const abs = index + match;
+    const blob = takeJsonObject(text, abs);
+    if (!blob) {
+      out += text.slice(abs);
+      break;
+    }
+    index = abs + blob.length;
+  }
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export function toolCallsFromMessage(raw: unknown[] | undefined): ToolCallView[] {
   return (raw || []).map((item, index) => {
     const rec = (item || {}) as Record<string, unknown>;

@@ -1,11 +1,11 @@
 "use client";
 
-import ReactMarkdown from "react-markdown";
+import { MarkdownBody } from "@/components/MarkdownBody";
 
 export function ReportView({ body }: { body: string }) {
   return (
     <div className="prose-studio text-xs text-neutral-700">
-      <ReactMarkdown>{body}</ReactMarkdown>
+      <MarkdownBody>{body}</MarkdownBody>
     </div>
   );
 }

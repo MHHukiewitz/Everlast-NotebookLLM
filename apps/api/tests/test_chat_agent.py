@@ -18,6 +18,8 @@ from app.services.chat_agent import (
 def test_system_uses_exact_no_answer() -> None:
     assert NO_ANSWER in SYSTEM
     assert "Beantworte zuerst die Frage" in SYSTEM
+    assert "Verbinde Fakten aus mehreren Quellen" in SYSTEM
+    assert "notes.create" not in skills.CHAT_TOOLS
     assert "Ollama" in SYSTEM
     assert "BM25" in SYSTEM
     assert "Hybrid-Search" in SYSTEM
@@ -67,7 +69,19 @@ def test_research_scratch_lists_candidates() -> None:
 def test_leaked_tool_extract() -> None:
     cleaned, calls = extract_leaked_tools('Hallo {"name": "sources.list", "arguments": {}} Ende')
     assert "Hallo" in cleaned
+    assert "Ende" in cleaned
     assert calls[0]["name"] == "sources.list"
+
+
+def test_leaked_notes_create_is_stripped_not_run() -> None:
+    raw = (
+        '{"name": "notes_create", "arguments": {"title": "Mike Hukiewitz - Everlast Kandidat", '
+        '"body": "Die Quellen enthalten dazu keine klare Antwort.", "message_id": "123456"}}'
+    )
+    cleaned, calls = extract_leaked_tools(raw)
+    assert "notes_create" not in cleaned
+    assert "keine klare Antwort" not in cleaned
+    assert calls == []
 
 
 def test_plain_text_strips_control_chars() -> None:

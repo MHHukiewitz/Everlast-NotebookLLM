@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { MarkdownBody } from "@/components/MarkdownBody";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import { SiteFooter } from "@/components/SiteFooter";
 import { ResizableStages } from "@/components/layout/ResizableStages";
@@ -10,7 +10,7 @@ import { ArtifactCard } from "@/components/studio/ArtifactCard";
 import { StudioRunModal } from "@/components/studio/StudioRunModal";
 import { StudioSkillButton } from "@/components/studio/StudioSkillButton";
 import { ApiError, api, streamChat, streamChatResume, uploadFile } from "@/lib/api";
-import { applyChatEvent, toolCallsFromMessage, type LivePart } from "@/lib/chatLive";
+import { applyChatEvent, toolCallsFromMessage, visibleChatText, type LivePart } from "@/lib/chatLive";
 import { t } from "@/lib/i18n";
 import { ACTIVE_NOTEBOOK_KEY, SOURCE_SORT_KEY } from "@/lib/notebook";
 import { displayUrl, isHttpUrl, sourceFavicon } from "@/lib/source";
@@ -233,18 +233,29 @@ export default function Page() {
 
   const researchId = research?.id;
   const researchStatus = research?.status;
+  const researchReportMd = research?.report_md ?? "";
+  const reportPending = researchStatus === "ready" && !researchReportMd.trim();
+  const shouldPollResearch =
+    researchStatus === "queued" ||
+    researchStatus === "running" ||
+    researchStatus === "importing" ||
+    reportPending;
 
   useEffect(() => {
-    if (!notebook || !researchId) return;
-    if (researchStatus !== "queued" && researchStatus !== "running" && researchStatus !== "importing") return;
+    if (!notebook || !researchId || !shouldPollResearch) return;
     let ticks = 0;
     const timer = window.setInterval(() => {
       ticks += 1;
       if (ticks > 90) {
-        setResearchError(t.searchTimeout);
-        setResearchBusy(false);
-        setPendingResearchId(null);
-        setBusy(false);
+        if (researchStatus === "importing") {
+          setResearchError(t.importTimeout);
+          setResearchBusy(false);
+        } else if (researchStatus === "queued" || researchStatus === "running") {
+          setResearchError(t.searchTimeout);
+          setResearchBusy(false);
+          setPendingResearchId(null);
+          setBusy(false);
+        }
         window.clearInterval(timer);
         return;
       }
@@ -253,7 +264,8 @@ export default function Page() {
         .then((next) => {
           setResearch(next);
           if (next.status === "ready") {
-            setSelectedCites(next.candidates.map((c) => c.id));
+            setResearchError("");
+            setSelectedCites((ids) => (ids.length ? ids : next.candidates.map((c) => c.id)));
             setResearchBusy(false);
             return;
           }
@@ -275,11 +287,13 @@ export default function Page() {
         })
         .catch((err: Error) => {
           setResearchError(err.message === "Failed to fetch" ? t.apiOffline : err.message);
-          setResearchBusy(false);
+          if (researchStatus === "queued" || researchStatus === "running") {
+            setResearchBusy(false);
+          }
         });
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [notebook, researchId, researchStatus, refresh, syncNotebook]);
+  }, [notebook, researchId, researchStatus, shouldPollResearch, refresh, syncNotebook]);
 
   async function onResearch() {
     if (!notebook || researchBusy) return;
@@ -290,6 +304,7 @@ export default function Page() {
     }
     setResearchError("");
     setResearchBusy(true);
+    setSelectedCites([]);
     setActiveSource(null);
     const job = await api.research(notebook.id, q, mode).catch((err: Error) => {
       setResearchError(err.message === "Failed to fetch" ? t.apiOffline : err.message);
@@ -405,6 +420,7 @@ export default function Page() {
           candidates: [],
         });
         setResearchBusy(true);
+        setSelectedCites([]);
         setActiveSource(null);
       }
     });
@@ -640,7 +656,11 @@ export default function Page() {
                 <button className="text-xs text-accent" onClick={onCancelResearch}>
                   ← {t.cancelResearch}
                 </button>
-                <ReactMarkdown>{research.report_md}</ReactMarkdown>
+                {research.report_md.trim() ? (
+                  <MarkdownBody>{research.report_md}</MarkdownBody>
+                ) : (
+                  <p className="text-xs text-neutral-500">{t.reportPending}</p>
+                )}
                 <p className="font-medium">{t.cited}</p>
                 {research.candidates.filter((c) => c.cited_in_report).map((c) => (
                   <label key={c.id} className="flex items-start gap-2">
@@ -708,7 +728,7 @@ export default function Page() {
                     )}
                   </div>
                 </div>
-                <ReactMarkdown>{activeSource.summary_md || activeSource.content_md}</ReactMarkdown>
+                <MarkdownBody>{activeSource.summary_md || activeSource.content_md}</MarkdownBody>
                 <div className="flex flex-wrap gap-2">
                   <a className="btn-primary inline-block" href={api.pdfUrl(notebook.id, activeSource.id)}>
                     {t.downloadPdf}
@@ -809,7 +829,7 @@ export default function Page() {
                     <div className={`inline-block max-w-full rounded-2xl px-4 py-3 text-sm ${message.role === "user" ? "bg-mist" : "bg-white"}`}>
                       {message.role === "assistant" &&
                         toolCallsFromMessage(message.tool_calls).map((tool) => <ToolCallCard key={tool.call_id} tool={tool} />)}
-                      {message.content ? <ReactMarkdown>{message.content}</ReactMarkdown> : null}
+                      {message.content ? <MarkdownBody>{visibleChatText(message.content)}</MarkdownBody> : null}
                       {message.citations?.length > 0 && (
                         <div className="mt-2 flex flex-wrap gap-1">
                           {message.citations.map((c) => (
@@ -836,7 +856,7 @@ export default function Page() {
                         <button
                           className="mt-2 text-xs text-accent"
                           onClick={() =>
-                            api.createNote(notebook.id, t.newNote, message.content, message.id).then(async () => {
+                            api.createNote(notebook.id, t.newNote, visibleChatText(message.content), message.id).then(async () => {
                               await refresh(notebook.id);
                               await syncNotebook(notebook.id);
                             })
@@ -848,16 +868,30 @@ export default function Page() {
                     </div>
                   </article>
                 ))}
-                {liveParts.length > 0 && (
+                {(busy || liveParts.length > 0) && (
                   <article>
                     <div className="rounded-2xl bg-white px-4 py-3 text-sm">
                       {pendingResearchId && <p className="mb-2 text-xs text-neutral-500">{t.researchWait}</p>}
+                      {liveParts.length === 0 && (
+                        <div className="thinking" aria-label={t.thinking} role="status">
+                          <span className="thinking-dot" />
+                          <span className="thinking-dot" />
+                          <span className="thinking-dot" />
+                        </div>
+                      )}
                       {liveParts.map((part) =>
                         part.kind === "tool" ? (
                           <ToolCallCard key={part.id} tool={part.tool} />
                         ) : (
-                          <ReactMarkdown key={part.id}>{part.text}</ReactMarkdown>
+                          <MarkdownBody key={part.id}>{visibleChatText(part.text)}</MarkdownBody>
                         ),
+                      )}
+                      {liveParts.length > 0 && busy && !liveParts.some((part) => part.kind === "text" && part.text.trim()) && (
+                        <div className="thinking mt-2" aria-label={t.thinking} role="status">
+                          <span className="thinking-dot" />
+                          <span className="thinking-dot" />
+                          <span className="thinking-dot" />
+                        </div>
                       )}
                     </div>
                   </article>

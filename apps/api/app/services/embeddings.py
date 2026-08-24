@@ -31,15 +31,9 @@ def _hash_embed(text: str) -> list[float]:
     return (vec / norm).tolist()
 
 
-def _ollama_embed(text: str) -> list[float]:
-    if not host_open(settings.ollama_api_base):
-        raise ValueError("Ollama ist nicht erreichbar. Embeddings brauchen ein lokales Modell.")
-    result = litellm_embedding(
-        model=f"ollama/{settings.embedding_model}",
-        input=[text],
-        api_base=settings.ollama_api_base,
-    )
-    vector = list(result.data[0]["embedding"])
+def _embedding_vector(item: object) -> list[float]:
+    raw = item["embedding"] if isinstance(item, dict) else item.embedding
+    vector = list(raw)
     if len(vector) != settings.embedding_dim:
         raise ValueError(
             f"Embedding-Dimension {len(vector)} passt nicht zu EMBEDDING_DIM={settings.embedding_dim}."
@@ -47,11 +41,31 @@ def _ollama_embed(text: str) -> list[float]:
     return vector
 
 
+def _embedding_index(item: object, fallback: int) -> int:
+    if isinstance(item, dict):
+        return int(item.get("index", fallback))
+    return int(getattr(item, "index", fallback))
+
+
+def _ollama_embed_many(texts: list[str]) -> list[list[float]]:
+    if not texts:
+        return []
+    if not host_open(settings.ollama_api_base):
+        raise ValueError("Ollama ist nicht erreichbar. Embeddings brauchen ein lokales Modell.")
+    result = litellm_embedding(
+        model=f"ollama/{settings.embedding_model}",
+        input=texts,
+        api_base=settings.ollama_api_base,
+    )
+    items = sorted(enumerate(result.data), key=lambda pair: _embedding_index(pair[1], pair[0]))
+    return [_embedding_vector(item) for _index, item in items]
+
+
 def embed_text(text: str) -> list[float]:
-    if settings.embedding_backend == "ollama":
-        return _ollama_embed(text)
-    return _hash_embed(text)
+    return embed_texts([text])[0]
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    return [embed_text(text) for text in texts]
+    if settings.embedding_backend == "ollama":
+        return _ollama_embed_many(texts)
+    return [_hash_embed(text) for text in texts]
