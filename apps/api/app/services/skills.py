@@ -8,10 +8,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Artifact, Message, Notebook, SkillRun, Source
 from app.schemas import SkillCard
-from app.models import ResearchJob
+from app.services.autoname import autoname_from_skill
 from app.services.ingest import ingest_text, ingest_url
-from app.services.research import run_research_job
-from app.services.studio import create_flashcards, create_mindmap, create_quiz, create_report, create_table
+from app.services.research import enqueue_research
+from app.services.studio import (
+    create_audio,
+    create_flashcards,
+    create_infographic,
+    create_mindmap,
+    create_quiz,
+    create_report,
+    create_slides,
+    create_table,
+    create_video,
+)
+from app.services.studio.infographic import SKILL_GUIDE
+from app.services.studio.mindmap import SKILL_GUIDE as MINDMAP_GUIDE
 
 Handler = Callable[[AsyncSession, Notebook, dict[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -143,31 +155,13 @@ async def _notes_create(session: AsyncSession, notebook: Notebook, args: dict[st
 
 
 async def _research_fast(session: AsyncSession, notebook: Notebook, args: dict[str, Any]) -> dict[str, Any]:
-    job = ResearchJob(
-        tenant_id=notebook.tenant_id,
-        notebook_id=notebook.id,
-        query=args["query"],
-        mode="fast",
-        status="queued",
-    )
-    session.add(job)
-    await session.commit()
-    await run_research_job(session, job.id)
-    return {"job_id": str(job.id), "mode": "fast"}
+    job = await enqueue_research(session, notebook, str(args["query"]), "fast")
+    return {"job_id": str(job.id), "mode": "fast", "status": job.status, "query": job.query}
 
 
 async def _research_deep(session: AsyncSession, notebook: Notebook, args: dict[str, Any]) -> dict[str, Any]:
-    job = ResearchJob(
-        tenant_id=notebook.tenant_id,
-        notebook_id=notebook.id,
-        query=args["query"],
-        mode="deep",
-        status="queued",
-    )
-    session.add(job)
-    await session.commit()
-    await run_research_job(session, job.id)
-    return {"job_id": str(job.id), "mode": "deep"}
+    job = await enqueue_research(session, notebook, str(args["query"]), "deep")
+    return {"job_id": str(job.id), "mode": "deep", "status": job.status, "query": job.query}
 
 
 REGISTRY: dict[str, Skill] = {
@@ -225,48 +219,141 @@ REGISTRY: dict[str, Skill] = {
         {"type": "object", "properties": {"title": {"type": "string"}, "body": {"type": "string"}, "message_id": {"type": "string"}}},
         _notes_create,
     ),
+    "studio.audio": Skill(
+        SkillCard(id="studio.audio", title="Audio-Zusammenfassung", description="Gespräch aus den gewählten Quellen", status="available", icon="audio"),
+        "Erzeugt ein Audio-Skript und Sprache aus den gewählten Quellen.",
+        {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string"},
+                "topic": {"type": "string"},
+                "focus": {"type": "string"},
+                "source_ids": {"type": "array", "items": {"type": "string"}},
+                "format": {"type": "string"},
+                "language": {"type": "string"},
+            },
+        },
+        create_audio,
+    ),
+    "studio.video": Skill(
+        SkillCard(id="studio.video", title="Videoübersicht", description="Video aus den gewählten Quellen", status="available", icon="video"),
+        "Erzeugt Szenen, Sprache und ein Video aus den gewählten Quellen.",
+        {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string"},
+                "topic": {"type": "string"},
+                "focus": {"type": "string"},
+                "source_ids": {"type": "array", "items": {"type": "string"}},
+                "format": {"type": "string"},
+                "language": {"type": "string"},
+                "style": {"type": "string"},
+            },
+        },
+        create_video,
+    ),
     "studio.mindmap": Skill(
-        SkillCard(id="studio.mindmap", title="Mindmap", description="Mindmap aus den gewählten Quellen", status="available", icon="mindmap"),
-        "Erzeugt eine Mindmap aus den gewählten Quellen.",
-        {"type": "object", "properties": {"topic": {"type": "string"}}},
+        SkillCard(
+            id="studio.mindmap",
+            title="Mindmap",
+            description="Mindmap aus den gewählten Quellen",
+            status="available",
+            icon="mindmap",
+            hint=MINDMAP_GUIDE,
+        ),
+        MINDMAP_GUIDE,
+        {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Anweisung für die Mindmap.",
+                },
+                "topic": {"type": "string"},
+                "source_ids": {"type": "array", "items": {"type": "string"}},
+            },
+        },
         create_mindmap,
     ),
     "studio.report": Skill(
         SkillCard(id="studio.report", title="Berichte", description="Bericht aus den gewählten Quellen", status="available", icon="report"),
         "Schreibt einen zitierten Bericht aus den gewählten Quellen.",
-        {"type": "object", "properties": {"topic": {"type": "string"}}},
+        {"type": "object", "properties": {"prompt": {"type": "string"}, "topic": {"type": "string"}, "source_ids": {"type": "array", "items": {"type": "string"}}}},
         create_report,
     ),
     "studio.quiz": Skill(
         SkillCard(id="studio.quiz", title="Quiz", description="Quiz aus den gewählten Quellen", status="available", icon="quiz"),
         "Erzeugt ein Quiz aus den gewählten Quellen.",
-        {"type": "object", "properties": {"topic": {"type": "string"}}},
+        {"type": "object", "properties": {"prompt": {"type": "string"}, "topic": {"type": "string"}, "source_ids": {"type": "array", "items": {"type": "string"}}}},
         create_quiz,
     ),
     "studio.flashcards": Skill(
         SkillCard(id="studio.flashcards", title="Karteikarten", description="Karteikarten aus den gewählten Quellen", status="available", icon="cards"),
         "Erzeugt Karteikarten aus den gewählten Quellen.",
-        {"type": "object", "properties": {"topic": {"type": "string"}}},
+        {"type": "object", "properties": {"prompt": {"type": "string"}, "topic": {"type": "string"}, "source_ids": {"type": "array", "items": {"type": "string"}}}},
         create_flashcards,
     ),
     "studio.table": Skill(
         SkillCard(id="studio.table", title="Datentabelle", description="Tabelle aus den gewählten Quellen", status="available", icon="table"),
         "Erzeugt eine Datentabelle aus den gewählten Quellen.",
-        {"type": "object", "properties": {"topic": {"type": "string"}}},
+        {"type": "object", "properties": {"prompt": {"type": "string"}, "topic": {"type": "string"}, "source_ids": {"type": "array", "items": {"type": "string"}}}},
         create_table,
+    ),
+    "studio.slides": Skill(
+        SkillCard(id="studio.slides", title="Präsentation", description="Folien aus den gewählten Quellen", status="available", icon="slides"),
+        "Erzeugt eine Präsentation aus den gewählten Quellen.",
+        {"type": "object", "properties": {"prompt": {"type": "string"}, "topic": {"type": "string"}, "source_ids": {"type": "array", "items": {"type": "string"}}}},
+        create_slides,
+    ),
+    "studio.infographic": Skill(
+        SkillCard(
+            id="studio.infographic",
+            title="Infografik",
+            description="Infografik aus den gewählten Quellen",
+            status="available",
+            icon="info",
+            hint=SKILL_GUIDE,
+        ),
+        SKILL_GUIDE,
+        {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Anweisung für Karten, Zahlenhervorhebung (number, suffix, caption) und optionale Diagramme. Erlaubte Diagrammtypen stehen in der Fähigkeitsbeschreibung: bar, hbar, pie.",
+                },
+                "topic": {"type": "string"},
+                "source_ids": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+        create_infographic,
     ),
 }
 
 STUDIO_CATALOG = [
     SkillCard(id="notes.create", title="Notiz", description="Notiz schreiben oder aus dem Chat speichern", status="available", icon="note"),
-    SkillCard(id="studio.audio", title="Audio-Zusammenfassung", description="Kommt nach dem MVP", status="locked", icon="audio"),
-    SkillCard(id="studio.slides", title="Präsentation", description="Kommt nach dem MVP", status="locked", icon="slides"),
-    SkillCard(id="studio.video", title="Videoübersicht", description="Kommt nach dem MVP", status="locked", icon="video"),
-    SkillCard(id="studio.mindmap", title="Mindmap", description="Mindmap aus den gewählten Quellen", status="available", icon="mindmap"),
+    SkillCard(id="studio.audio", title="Audio-Zusammenfassung", description="Gespräch aus den gewählten Quellen", status="available", icon="audio"),
+    SkillCard(id="studio.slides", title="Präsentation", description="Folien aus den gewählten Quellen", status="available", icon="slides"),
+    SkillCard(id="studio.video", title="Videoübersicht", description="Video aus den gewählten Quellen", status="available", icon="video"),
+    SkillCard(
+        id="studio.mindmap",
+        title="Mindmap",
+        description="Mindmap aus den gewählten Quellen",
+        status="available",
+        icon="mindmap",
+        hint=MINDMAP_GUIDE,
+    ),
     SkillCard(id="studio.report", title="Berichte", description="Bericht aus den gewählten Quellen", status="available", icon="report"),
     SkillCard(id="studio.flashcards", title="Karteikarten", description="Karteikarten aus den gewählten Quellen", status="available", icon="cards"),
     SkillCard(id="studio.quiz", title="Quiz", description="Quiz aus den gewählten Quellen", status="available", icon="quiz"),
-    SkillCard(id="studio.infographic", title="Infografik", description="Kommt nach dem MVP", status="locked", icon="info"),
+    SkillCard(
+        id="studio.infographic",
+        title="Infografik",
+        description="Infografik aus den gewählten Quellen",
+        status="available",
+        icon="info",
+        hint=SKILL_GUIDE,
+    ),
     SkillCard(id="studio.table", title="Datentabelle", description="Tabelle aus den gewählten Quellen", status="available", icon="table"),
 ]
 
@@ -307,6 +394,7 @@ async def run_skill(
     if skill.handler is None:
         raise ValueError("Diese Studio-Funktion ist gesperrt.")
     result = await skill.handler(session, notebook, args)
+    await autoname_from_skill(session, notebook, skill_id, args, result)
     digest = hashlib.sha256(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()
     session.add(
         SkillRun(

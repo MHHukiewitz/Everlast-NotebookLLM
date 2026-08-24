@@ -1,29 +1,33 @@
 from app.services.skills import REGISTRY, STUDIO_CATALOG
 
-LOCKED = {"studio.audio", "studio.slides", "studio.video", "studio.infographic"}
 AVAILABLE = {
     "notes.create",
+    "studio.audio",
+    "studio.video",
     "studio.mindmap",
     "studio.report",
     "studio.quiz",
     "studio.flashcards",
     "studio.table",
+    "studio.slides",
+    "studio.infographic",
 }
 
 
-def test_flashcards_and_table_are_available() -> None:
+def test_slides_and_infographic_are_available() -> None:
     cards = {card.id: card.status for card in STUDIO_CATALOG}
-    assert cards["studio.flashcards"] == "available"
-    assert cards["studio.table"] == "available"
-    assert "studio.flashcards" in REGISTRY
-    assert "studio.table" in REGISTRY
+    assert cards["studio.slides"] == "available"
+    assert cards["studio.infographic"] == "available"
+    assert "studio.slides" in REGISTRY
+    assert "studio.infographic" in REGISTRY
 
 
-def test_media_skills_stay_locked() -> None:
+def test_audio_and_video_are_available() -> None:
     cards = {card.id: card.status for card in STUDIO_CATALOG}
-    for skill_id in LOCKED:
-        assert cards[skill_id] == "locked"
-        assert skill_id not in REGISTRY
+    assert cards["studio.audio"] == "available"
+    assert cards["studio.video"] == "available"
+    assert "studio.audio" in REGISTRY
+    assert "studio.video" in REGISTRY
 
 
 def test_available_studio_skills_have_handlers() -> None:

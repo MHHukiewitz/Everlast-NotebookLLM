@@ -8,4 +8,4 @@ See the interview plan. Runtime shape:
 
 The chat agent loads a short skill list, then the full schema of the chosen skill. MCP is not the primary path.
 
-Studio reads `GET /api/skills`. Notes, Mindmap, Report, Quiz, Flashcards, and Table are available. Locked skills return HTTP 400. Add a later feature as one registry entry plus a renderer. Each artifact can export md, csv, pdf, json, or mermaid.
+Studio reads `GET /api/skills`. Notes, Mindmap, Report, Quiz, Flashcards, Table, Slides, and Infographic are available. Audio and video stay locked. Add a later feature as one registry entry plus a renderer. Each artifact can export md, csv, pdf, json, mermaid, or svg.

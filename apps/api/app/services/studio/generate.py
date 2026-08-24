@@ -1,6 +1,9 @@
 import json
+import re
 import socket
 import uuid
+from contextvars import ContextVar
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
@@ -14,6 +17,42 @@ from app.services.retrieve import hybrid_search
 from app.services.tracing import pack_prompt, record_generation, start_trace
 
 DEFAULT_QUERY = "Kernaussagen der Quellen"
+RENDER_RETRIES = 3
+GIVE_UP = "Die Ausgabe konnte nach drei Versuchen nicht erzeugt werden."
+CheckFn = Callable[[dict[str, Any]], tuple[bool, str]]
+STUDIO_USER = """Anweisung: {prompt}
+
+Quellenkontext:
+{context}
+"""
+EVAL_MODE: ContextVar[bool] = ContextVar("eval_mode", default=False)
+_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+
+INVALID_STUDIO = {
+    "title": "Keine gültige Studio-Ausgabe",
+    "mermaid": "mindmap\n  root((Keine Ausgabe))",
+    "mermaid_lines": ["mindmap", "  root((Keine Ausgabe))"],
+    "body_md": "Keine gültige Studio-Ausgabe.",
+    "questions": [
+        {
+            "question": "Keine gültige Studio-Ausgabe",
+            "choices": ["–", "–", "–", "–"],
+            "answer_index": 0,
+            "explanation": "",
+        }
+    ],
+    "cards": [{"front": "Keine Ausgabe", "back": "Keine Ausgabe", "cite": ""}],
+    "columns": ["Feld", "Wert"],
+    "rows": [["Status", "Keine gültige Studio-Ausgabe"]],
+    "turns": [{"speaker": "A", "text": "Keine gültige Studio-Ausgabe"}],
+    "scenes": [
+        {
+            "heading": "Keine Ausgabe",
+            "bullets": ["Keine gültige Studio-Ausgabe"],
+            "narration": "Keine gültige Studio-Ausgabe",
+        }
+    ],
+}
 
 
 def _host_open(url: str) -> bool:
@@ -78,13 +117,27 @@ def sanitize_json_escapes(text: str) -> str:
     return "".join(out)
 
 
-def parse_json_object(raw: str) -> dict[str, Any]:
+def load_json_object(raw: str) -> dict[str, Any] | None:
     text = strip_fences(raw)
     start = text.find("{")
     end = text.rfind("}")
     if start < 0 or end <= start:
+        return None
+    cleaned = _TRAILING_COMMA.sub(r"\1", sanitize_json_escapes(text[start : end + 1]))
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def parse_json_object(raw: str) -> dict[str, Any]:
+    data = load_json_object(raw)
+    if data is None:
         raise ValueError("Das Modell lieferte kein JSON.")
-    return json.loads(sanitize_json_escapes(text[start : end + 1]))
+    return data
 
 
 async def selected_ready_ids(session: AsyncSession, notebook_id: uuid.UUID) -> list[uuid.UUID]:
@@ -100,14 +153,49 @@ async def selected_ready_ids(session: AsyncSession, notebook_id: uuid.UUID) -> l
     return list(rows)
 
 
+def topic_from_args(args: dict[str, Any], default: str = "") -> str:
+    return str(args.get("prompt") or args.get("focus") or args.get("topic") or default).strip()
+
+
+def source_ids_from_args(args: dict[str, Any]) -> list[uuid.UUID] | None:
+    raw = args.get("source_ids")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError("source_ids muss eine Liste sein.")
+    return [uuid.UUID(str(item)) for item in raw]
+
+
+async def ready_source_ids(
+    session: AsyncSession, notebook_id: uuid.UUID, wanted: list[uuid.UUID]
+) -> list[uuid.UUID]:
+    rows = (
+        await session.execute(
+            select(Source.id).where(
+                Source.notebook_id == notebook_id,
+                Source.status == "ready",
+                Source.id.in_(wanted),
+            )
+        )
+    ).scalars()
+    found = set(rows)
+    return [source_id for source_id in wanted if source_id in found]
+
+
 async def retrieve_context(
-    session: AsyncSession, notebook: Notebook, topic: str
+    session: AsyncSession,
+    notebook: Notebook,
+    topic: str,
+    source_ids: list[uuid.UUID] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
-    source_ids = await selected_ready_ids(session, notebook.id)
-    if not source_ids:
+    if source_ids is None:
+        chosen = await selected_ready_ids(session, notebook.id)
+    else:
+        chosen = await ready_source_ids(session, notebook.id, source_ids)
+    if not chosen:
         raise ValueError("Wähle mindestens eine Quelle.")
     query = topic.strip() or DEFAULT_QUERY
-    chunks = await hybrid_search(session, notebook.id, notebook.tenant_id, query, source_ids)
+    chunks = await hybrid_search(session, notebook.id, notebook.tenant_id, query, chosen)
     if not chunks:
         raise ValueError("Die gewählten Quellen haben keine durchsuchbaren Abschnitte.")
     blocks: list[str] = []
@@ -120,6 +208,7 @@ async def retrieve_context(
                 "source_id": chunk["source_id"],
                 "chunk_id": chunk["chunk_id"],
                 "quote": chunk["text"][:280],
+                "source_title": chunk["source_title"],
             }
         )
     return "\n\n".join(blocks), citations
@@ -131,35 +220,64 @@ async def generate_json(
     topic: str,
     system: str,
     user_template: str,
+    source_ids: list[uuid.UUID] | None = None,
+    check: CheckFn | None = None,
 ) -> dict[str, Any]:
     require_provider(notebook)
-    context, citations = await retrieve_context(session, notebook, topic)
-    messages = [
-        {"role": "system", "content": system},
-        {
-            "role": "user",
-            "content": user_template.replace("{topic}", topic or DEFAULT_QUERY).replace("{context}", context),
-        },
-    ]
-    completion = await router.complete(notebook.provider, notebook.model_id, messages)
-    raw = completion.choices[0].message.content or ""
-    await record_generation(
-        session,
-        tenant_id=notebook.tenant_id,
-        notebook_id=notebook.id,
-        kind="studio",
-        model=f"{notebook.provider}/{notebook.model_id}",
-        prompt=pack_prompt(messages),
-        raw_output=raw,
-        visible_output=raw,
-        extra={"topic": topic},
-        trace_id=start_trace("studio", notebook.tenant_id, {"notebook_id": str(notebook.id)}),
-    )
-    if not raw.strip():
-        raise ValueError("Das Modell lieferte keine Ausgabe.")
-    payload = parse_json_object(raw)
-    payload["citations"] = citations
-    return payload
+    context, citations = await retrieve_context(session, notebook, topic, source_ids)
+    instruction = topic or DEFAULT_QUERY
+    rounds = 1 if check is None else RENDER_RETRIES + 1
+    reason = ""
+    last: dict[str, Any] | None = None
+    for _ in range(rounds):
+        prompt = instruction
+        if reason:
+            prompt = f"{instruction}\n\nVorige Ausgabe war ungültig ({reason}). Erzeuge die Ausgabe neu."
+        messages = [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": user_template.replace("{topic}", prompt)
+                .replace("{prompt}", prompt)
+                .replace("{context}", context),
+            },
+        ]
+        completion = await router.complete(notebook.provider, notebook.model_id, messages)
+        raw = completion.choices[0].message.content or ""
+        await record_generation(
+            session,
+            tenant_id=notebook.tenant_id,
+            notebook_id=notebook.id,
+            kind="studio",
+            model=f"{notebook.provider}/{notebook.model_id}",
+            prompt=pack_prompt(messages),
+            raw_output=raw,
+            visible_output=raw,
+            extra={"topic": topic, "check_reason": reason},
+            trace_id=start_trace("studio", notebook.tenant_id, {"notebook_id": str(notebook.id)}),
+        )
+        payload = load_json_object(raw) if raw.strip() else None
+        if payload is None:
+            if check is None:
+                if EVAL_MODE.get():
+                    fallback = dict(INVALID_STUDIO)
+                    fallback["citations"] = citations
+                    return fallback
+                raise ValueError("Das Modell lieferte keine Ausgabe." if not raw.strip() else "Das Modell lieferte kein JSON.")
+            reason = "keine gültige JSON-Ausgabe"
+            last = dict(INVALID_STUDIO)
+            last["citations"] = citations
+            continue
+        payload["citations"] = citations
+        if check is None:
+            return payload
+        ok, reason = check(payload)
+        if ok:
+            return payload
+        last = payload
+    if EVAL_MODE.get() and last is not None:
+        return last
+    raise ValueError(GIVE_UP)
 
 
 async def save_artifact(

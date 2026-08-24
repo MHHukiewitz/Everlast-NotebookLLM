@@ -6,8 +6,10 @@ from app.config import settings
 from app.db import get_session
 from app.deps import current_tenant, current_user, owned_notebook
 from app.models import AuditEvent, Notebook, User
-from app.schemas import NotebookOut, NotebookUpdate, ProviderStatus
+from app.schemas import ModalitiesOut, NotebookOut, NotebookUpdate, ProviderStatus
+from app.services.autoname import UNTITLED_TITLE
 from app.services.connectors import router as model_router
+from app.services.modalities import list_modalities
 
 api = APIRouter(prefix="/api")
 
@@ -17,13 +19,18 @@ async def providers(_: User = Depends(current_user)) -> list[ProviderStatus]:
     return model_router.list_providers()
 
 
+@api.get("/modalities", response_model=ModalitiesOut)
+async def modalities(_: User = Depends(current_user)) -> ModalitiesOut:
+    return list_modalities()
+
+
 @api.post("/notebooks", response_model=NotebookOut)
 async def create_notebook(
     session: AsyncSession = Depends(get_session), tenant: str = Depends(current_tenant)
 ) -> Notebook:
     notebook = Notebook(
         tenant_id=tenant,
-        title="Unbenanntes Notebook",
+        title=UNTITLED_TITLE,
         provider=settings.default_provider,
         model_id=settings.default_model,
     )
@@ -54,9 +61,10 @@ async def update_notebook(
     notebook: Notebook = Depends(owned_notebook),
     session: AsyncSession = Depends(get_session),
 ) -> Notebook:
-    if body.provider == "eu" and not body.eu_notice_accepted and not notebook.eu_notice_accepted:
+    cloud = {body.provider, body.tts_provider, body.image_provider}
+    if "eu" in cloud and not body.eu_notice_accepted and not notebook.eu_notice_accepted:
         raise HTTPException(400, "EU-Hinweis muss bestätigt werden.")
-    if body.provider == "openrouter" and not body.openrouter_notice_accepted and not notebook.openrouter_notice_accepted:
+    if "openrouter" in cloud and not body.openrouter_notice_accepted and not notebook.openrouter_notice_accepted:
         raise HTTPException(400, "OpenRouter-Hinweis muss bestätigt werden.")
     if body.title is not None:
         notebook.title = body.title
@@ -64,6 +72,14 @@ async def update_notebook(
         notebook.provider = body.provider
     if body.model_id is not None:
         notebook.model_id = body.model_id
+    if body.tts_provider is not None:
+        notebook.tts_provider = body.tts_provider
+    if body.tts_model is not None:
+        notebook.tts_model = body.tts_model
+    if body.image_provider is not None:
+        notebook.image_provider = body.image_provider
+    if body.image_model is not None:
+        notebook.image_model = body.image_model
     if body.eu_notice_accepted is not None:
         notebook.eu_notice_accepted = body.eu_notice_accepted
     if body.openrouter_notice_accepted is not None:

@@ -1,0 +1,242 @@
+import io
+import math
+from pathlib import Path
+from typing import Any
+
+from PIL import Image, ImageDraw, ImageFont
+
+from app.services.pdf import AI_MARK
+from app.services.studio.mindmap import MindNode, parse_mindmap
+
+FILLS = ((239, 246, 255), (245, 243, 255), (240, 253, 244), (255, 247, 237))
+CHART_COLORS = ((37, 99, 235), (124, 58, 237), (22, 163, 74), (217, 119, 6), (219, 39, 119), (8, 145, 178))
+GAP = 16
+PAGE_W = 960
+
+
+def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    for path in (
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ):
+        if Path(path).exists():
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default()
+
+
+def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, width: int) -> list[str]:
+    words = str(text or "").split()
+    if not words:
+        return []
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        trial = f"{current} {word}"
+        if draw.textlength(trial, font=font) <= width:
+            current = trial
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines[:8]
+
+
+def _png_bytes(image: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def infographic_png(title: str, payload: dict[str, Any]) -> bytes:
+    probe = Image.new("RGB", (10, 10), (255, 255, 255))
+    draw = ImageDraw.Draw(probe)
+    title_font = _font(22)
+    label_font = _font(12)
+    value_font = _font(16)
+    number_font = _font(32)
+    suffix_font = _font(20)
+    body_font = _font(13)
+    items = payload.get("items") or []
+    charts = payload.get("charts") or []
+    y = 56
+    chart_h = 0
+    for chart in charts:
+        points = chart.get("points") or []
+        if len(points) < 2:
+            continue
+        kind = str(chart.get("type") or "bar")
+        if kind == "pie":
+            chart_h += 200
+        elif kind == "bar":
+            chart_h += 170
+        else:
+            chart_h += len(points) * 28 + 40
+    y += chart_h
+    col_w = 448
+    row_h = 0
+    card_boxes: list[tuple[int, int, int, dict[str, Any]]] = []
+    for index, item in enumerate(items):
+        inner = col_w - 32
+        caption_lines = _wrap(draw, str(item.get("caption") or ""), body_font, inner)
+        value = str(item.get("value") or "")
+        caption = str(item.get("caption") or "")
+        detail = str(item.get("detail") or "")
+        value_lines = _wrap(draw, value, value_font, inner) if value and value != caption else []
+        detail_lines = _wrap(draw, detail, body_font, inner) if detail and detail != caption else []
+        height = 56 + (40 if item.get("number") else 0)
+        height += 18 * len(caption_lines) + 22 * len(value_lines) + 18 * len(detail_lines)
+        col = index % 2
+        if col == 0:
+            row_h = height
+        else:
+            row_h = max(row_h, height)
+        x = 24 + col * (col_w + GAP)
+        card_boxes.append((x, y, height, item))
+        if col == 1 or index == len(items) - 1:
+            y += row_h + GAP
+    total_h = max(y + 36, 200)
+    image = Image.new("RGB", (PAGE_W, total_h), (255, 255, 255))
+    canvas = ImageDraw.Draw(image)
+    canvas.text((24, 20), title, font=title_font, fill=(31, 31, 31))
+    chart_y = 56
+    for chart in charts:
+        chart_y = _draw_chart(canvas, chart, 24, chart_y, PAGE_W - 48, label_font, value_font)
+    for index, (x, top, height, item) in enumerate(card_boxes):
+        fill = FILLS[index % len(FILLS)]
+        canvas.rounded_rectangle((x, top, x + col_w, top + height), 10, fill=fill, outline=(229, 229, 229))
+        cursor = top + 14
+        canvas.text((x + 16, cursor), f"{index + 1} · {item.get('label') or ''}", font=label_font, fill=(115, 115, 115))
+        cursor += 22
+        if item.get("number"):
+            canvas.text((x + 16, cursor), str(item.get("number")), font=number_font, fill=(31, 31, 31))
+            if item.get("suffix"):
+                num_w = canvas.textlength(str(item.get("number")), font=number_font)
+                canvas.text((x + 20 + num_w, cursor + 10), str(item.get("suffix")), font=suffix_font, fill=(82, 82, 82))
+            cursor += 40
+        caption = str(item.get("caption") or "")
+        value = str(item.get("value") or "")
+        detail = str(item.get("detail") or "")
+        for line in _wrap(canvas, caption, body_font, col_w - 32):
+            canvas.text((x + 16, cursor), line, font=body_font, fill=(64, 64, 64))
+            cursor += 18
+        if value and value != caption:
+            for line in _wrap(canvas, value, value_font, col_w - 32):
+                canvas.text((x + 16, cursor), line, font=value_font, fill=(31, 31, 31))
+                cursor += 22
+        if detail and detail != caption:
+            for line in _wrap(canvas, detail, body_font, col_w - 32):
+                canvas.text((x + 16, cursor), line, font=body_font, fill=(82, 82, 82))
+                cursor += 18
+    canvas.text((24, total_h - 22), AI_MARK, font=label_font, fill=(115, 115, 115))
+    return _png_bytes(image)
+
+
+def _draw_chart(
+    canvas: ImageDraw.ImageDraw,
+    chart: dict[str, Any],
+    x: int,
+    y: int,
+    width: int,
+    label_font: ImageFont.ImageFont,
+    value_font: ImageFont.ImageFont,
+) -> int:
+    points = [point for point in chart.get("points") or [] if isinstance(point, dict)]
+    if len(points) < 2:
+        return y
+    canvas.text((x, y), str(chart.get("title") or "Diagramm"), font=value_font, fill=(31, 31, 31))
+    y += 28
+    values = [float(point.get("value") or 0) for point in points]
+    peak = max(values) or 1
+    kind = str(chart.get("type") or "bar")
+    unit = str(chart.get("unit") or "")
+    if kind == "pie":
+        total = sum(values) or 1
+        cx, cy, radius = x + 80, y + 70, 60
+        start = -90
+        for index, point in enumerate(points):
+            sweep = 360 * values[index] / total
+            color = CHART_COLORS[index % len(CHART_COLORS)]
+            canvas.pieslice((cx - radius, cy - radius, cx + radius, cy + radius), start, start + sweep, fill=color)
+            canvas.rectangle((x + 180, y + index * 22, x + 190, y + 10 + index * 22), fill=color)
+            canvas.text(
+                (x + 198, y + index * 22),
+                f"{point.get('label') or ''} · {values[index]:g}{(' ' + unit) if unit else ''}",
+                font=label_font,
+                fill=(31, 31, 31),
+            )
+            start += sweep
+        return y + 160
+    if kind == "bar":
+        bar_w = max(24, int((width - 20) / len(points)) - 8)
+        for index, point in enumerate(points):
+            bar_h = max(6, int(values[index] / peak * 110))
+            left = x + index * (bar_w + 8)
+            color = CHART_COLORS[index % len(CHART_COLORS)]
+            canvas.rounded_rectangle((left, y + 120 - bar_h, left + bar_w, y + 120), 4, fill=color)
+            canvas.text((left, y + 124), str(point.get("label") or "")[:12], font=label_font, fill=(82, 82, 82))
+            canvas.text((left, y), f"{values[index]:g}", font=label_font, fill=(31, 31, 31))
+        return y + 150
+    for index, point in enumerate(points):
+        bar_w = max(8, int(values[index] / peak * 360))
+        color = CHART_COLORS[index % len(CHART_COLORS)]
+        yy = y + index * 28
+        canvas.text((x, yy), str(point.get("label") or ""), font=label_font, fill=(31, 31, 31))
+        canvas.rounded_rectangle((x + 200, yy, x + 200 + bar_w, yy + 16), 4, fill=color)
+        canvas.text((x + 208 + bar_w, yy), f"{values[index]:g}{(' ' + unit) if unit else ''}", font=label_font, fill=(31, 31, 31))
+    return y + len(points) * 28 + 16
+
+
+def mindmap_png(title: str, payload: dict[str, Any]) -> bytes:
+    root = parse_mindmap(str(payload.get("mermaid") or ""))
+    title_font = _font(22)
+    node_font = _font(15)
+    probe = Image.new("RGB", (10, 10), (255, 255, 255))
+    draw = ImageDraw.Draw(probe)
+    boxes: dict[int, tuple[int, int, int, int, str]] = {}
+    next_leaf_y = 80
+
+    def measure(node: MindNode) -> tuple[int, int]:
+        lines = _wrap(draw, node.label, node_font, 200) or [node.label]
+        return (int(max(draw.textlength(line, font=node_font) for line in lines)) + 28, 18 * len(lines) + 16)
+
+    def place(node: MindNode, depth: int) -> tuple[int, int]:
+        nonlocal next_leaf_y
+        width, height = measure(node)
+        if not node.children:
+            cy = next_leaf_y + height // 2
+            next_leaf_y += height + 20
+        else:
+            child_centers = [place(child, depth + 1)[1] for child in node.children]
+            cy = (child_centers[0] + child_centers[-1]) // 2
+        x = 32 + depth * 240
+        boxes[id(node)] = (x, cy - height // 2, width, height, node.label)
+        return x, cy
+
+    place(root, 0)
+    max_x = max(box[0] + box[2] for box in boxes.values())
+    max_y = max(box[1] + box[3] for box in boxes.values())
+    image = Image.new("RGB", (max(PAGE_W, max_x + 48), max(max_y + 48, 200)), (255, 255, 255))
+    canvas = ImageDraw.Draw(image)
+    canvas.text((24, 20), title, font=title_font, fill=(31, 31, 31))
+
+    def connect(node: MindNode) -> None:
+        parent = boxes[id(node)]
+        px, py, pw, ph, _label = parent
+        for child in node.children:
+            cx, cy, _cw, ch, _cl = boxes[id(child)]
+            canvas.line((px + pw, py + ph // 2, cx, cy + ch // 2), fill=(165, 180, 200), width=2)
+            connect(child)
+
+    connect(root)
+    for index, node_id in enumerate(boxes):
+        x, y, width, height, label = boxes[node_id]
+        fill = FILLS[index % len(FILLS)]
+        canvas.rounded_rectangle((x, y, x + width, y + height), 10, fill=fill, outline=(37, 99, 235))
+        lines = _wrap(canvas, label, node_font, max(width - 16, 40)) or [label]
+        cursor = y + 8
+        for line in lines:
+            canvas.text((x + 12, cursor), line, font=node_font, fill=(31, 31, 31))
+            cursor += 18
+    canvas.text((24, image.height - 22), AI_MARK, font=_font(11), fill=(115, 115, 115))
+    return _png_bytes(image)

@@ -21,14 +21,25 @@ class ProviderStatus(BaseModel):
     models: list[ModelCard]
 
 
+class ModalitiesOut(BaseModel):
+    llm: list[ProviderStatus]
+    tts: list[ProviderStatus]
+    image: list[ProviderStatus]
+
+
 class NotebookOut(BaseModel):
     id: uuid.UUID
     title: str
     provider: str
     model_id: str
+    tts_provider: str
+    tts_model: str
+    image_provider: str
+    image_model: str
     eu_notice_accepted: bool
     openrouter_notice_accepted: bool
     created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -37,6 +48,10 @@ class NotebookUpdate(BaseModel):
     title: str | None = None
     provider: Literal["ollama", "eu", "openrouter"] | None = None
     model_id: str | None = None
+    tts_provider: Literal["local", "eu", "openrouter"] | None = None
+    tts_model: str | None = None
+    image_provider: Literal["local", "eu", "openrouter"] | None = None
+    image_model: str | None = None
     eu_notice_accepted: bool | None = None
     openrouter_notice_accepted: bool | None = None
 
@@ -121,6 +136,10 @@ class ChatIn(BaseModel):
     content: str
 
 
+class ChatResumeIn(BaseModel):
+    job_id: uuid.UUID
+
+
 class ArtifactOut(BaseModel):
     id: uuid.UUID
     skill_id: str
@@ -144,6 +163,7 @@ class SkillCard(BaseModel):
     description: str
     status: Literal["available", "locked"]
     icon: str
+    hint: str | None = None
 
 
 class SkillRunIn(BaseModel):

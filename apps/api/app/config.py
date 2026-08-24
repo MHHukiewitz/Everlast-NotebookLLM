@@ -33,6 +33,18 @@ class Settings(BaseSettings):
     embedding_dim: int = 768
     embedding_model: str = "nomic-embed-text"
 
+    tts_local_base_url: str = "http://127.0.0.1:8880"
+    tts_local_models: str = "kokoro"
+    tts_eu_models: str = ""
+    tts_openrouter_models: str = "openai/gpt-4o-mini-tts"
+    tts_voice_a: str = "alloy"
+    tts_voice_b: str = "nova"
+
+    image_local_base_url: str = "http://127.0.0.1:8081"
+    image_local_models: str = "flux"
+    image_eu_models: str = ""
+    image_openrouter_models: str = "google/gemini-2.5-flash-image"
+
     searxng_url: str = "http://localhost:8080"
     langfuse_host: str = ""
     langfuse_public_key: str = ""

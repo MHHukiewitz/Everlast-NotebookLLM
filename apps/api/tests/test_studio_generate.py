@@ -1,6 +1,6 @@
 import pytest
 
-from app.services.studio.generate import parse_json_object, sanitize_json_escapes, strip_fences
+from app.services.studio.generate import STUDIO_USER, load_json_object, parse_json_object, sanitize_json_escapes, strip_fences
 
 
 def test_strip_fences_json() -> None:
@@ -30,3 +30,18 @@ def test_parse_json_object_from_fences() -> None:
 def test_parse_json_object_requires_object() -> None:
     with pytest.raises(ValueError):
         parse_json_object("kein objekt")
+
+
+def test_load_json_object_accepts_trailing_comma() -> None:
+    data = load_json_object('{"title": "A",}')
+    assert data == {"title": "A"}
+
+
+def test_load_json_object_rejects_broken_json() -> None:
+    assert load_json_object('{\n  "title": "A"\n  "body": 1\n}') is None
+
+
+def test_studio_user_includes_prompt() -> None:
+    text = STUDIO_USER.replace("{prompt}", "Nur DSGVO-Pflichten").replace("{context}", "[1] Text")
+    assert "Nur DSGVO-Pflichten" in text
+    assert "[1] Text" in text
