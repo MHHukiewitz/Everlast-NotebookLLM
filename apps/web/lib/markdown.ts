@@ -9,6 +9,10 @@ export function normalizeMarkdown(text: string): string {
   return out.trim();
 }
 
+export function protectCiteMarks(text: string): string {
+  return (text || "").replace(/\[(\d+)\]/g, "⟦$1⟧");
+}
+
 function unwrapOuterFence(text: string): string {
   const lines = text.split("\n");
   const first = lines[0]?.trim() ?? "";

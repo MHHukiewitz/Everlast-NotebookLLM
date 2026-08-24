@@ -13,7 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY apps/api/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN mkdir -p /opt/tts-voices \
+    && python -m piper.download_voices de_DE-thorsten-medium de_DE-kerstin-low --download-dir /opt/tts-voices
 COPY apps/api /app
+ENV TTS_PIPER_VOICE_DIR=/opt/tts-voices
 
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000

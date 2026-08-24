@@ -78,6 +78,8 @@ export const api = {
     `${BASE}/api/notebooks/${notebookId}/artifacts/${artifactId}/export?format=${format}`,
   artifactToSource: (notebookId: string, artifactId: string) =>
     req<Source>(`/api/notebooks/${notebookId}/artifacts/${artifactId}/source`, { method: "POST" }),
+  deleteArtifact: (notebookId: string, artifactId: string) =>
+    req<{ status: string }>(`/api/notebooks/${notebookId}/artifacts/${artifactId}`, { method: "DELETE" }),
   artifactMediaUrl: (notebookId: string, artifactId: string) =>
     `${BASE}/api/notebooks/${notebookId}/artifacts/${artifactId}/media`,
   createNote: (id: string, title: string, body: string, messageId?: string) =>

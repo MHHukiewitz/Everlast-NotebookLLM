@@ -24,6 +24,8 @@ from app.services.chat_agent import (
     step_event,
     strip_citation_dump,
     thinking_text,
+    delta_stream_parts,
+    join_system,
     tool_prelude_events,
     used_citations,
 )
@@ -125,6 +127,52 @@ def test_split_incomplete_tool_holds_prefixes() -> None:
     visible, held = split_incomplete_tool('Text {"name": "notes_create"')
     assert visible == "Text "
     assert held.startswith("{")
+    german = "Everlast berät den Mittelstand in Deutschland."
+    assert split_incomplete_tool(german) == (german, "")
+    visible, held = split_incomplete_tool("Antwort:\n```python\nprint(1)\n")
+    assert visible.startswith("Antwort:")
+    assert "print(1)" in visible
+    assert held == ""
+
+
+def test_join_system_keeps_one_block() -> None:
+    packed = join_system(SYSTEM, "Quellenkontext:\n[1] Everlast: Beratung")
+    assert packed.startswith("Du bist Everlast Notebook")
+    assert "Quellenkontext:" in packed
+    assert packed.count("Quellenkontext:") == 1
+
+
+def test_delta_stream_parts_hetzner_reasoning_is_content() -> None:
+    reasoning = SimpleNamespace(
+        content=None,
+        reasoning_content="Everlast berät Unternehmen.",
+        reasoning=None,
+        thinking=None,
+        model_extra=None,
+    )
+    think, content = delta_stream_parts(reasoning, "hetzner")
+    assert think == ""
+    assert content == "Everlast berät Unternehmen."
+    visible = SimpleNamespace(
+        content="Sichtbarer Satz.",
+        reasoning_content=None,
+        reasoning=None,
+        thinking=None,
+        model_extra=None,
+    )
+    think, content = delta_stream_parts(visible, "hetzner")
+    assert think == ""
+    assert content == "Sichtbarer Satz."
+    ollama = SimpleNamespace(
+        content=None,
+        reasoning_content="Nur Denken",
+        reasoning=None,
+        thinking=None,
+        model_extra=None,
+    )
+    think, content = delta_stream_parts(ollama, "ollama")
+    assert think == "Nur Denken"
+    assert content == ""
 
 
 def test_citation_dump_and_used_filter() -> None:
@@ -163,7 +211,8 @@ def test_retrieve_step_detail_counts_hits() -> None:
 
 def test_thinking_text_reads_reasoning_and_thinking() -> None:
     assert thinking_text(SimpleNamespace(reasoning_content="Schritt", thinking=None, model_extra=None)) == "Schritt"
-    assert thinking_text(SimpleNamespace(reasoning_content=None, thinking="Denk", model_extra=None)) == "Denk"
+    assert thinking_text(SimpleNamespace(reasoning=None, reasoning_content=None, thinking="Denk", model_extra=None)) == "Denk"
+    assert thinking_text(SimpleNamespace(reasoning="Pfad", reasoning_content=None, thinking=None, model_extra=None)) == "Pfad"
     assert thinking_text(SimpleNamespace(reasoning_content=None, thinking=None, model_extra=None)) == ""
 
 
@@ -377,7 +426,7 @@ def test_run_chat_emits_retrieve_step(monkeypatch) -> None:
     assert retrieve[0]["detail"] == "2 Treffer in 2 Quellen"
     assert all(event["event"] != "think" for event in events)
     done = next(event for event in events if event["event"] == "done")
-    assert done["citations"] == []
+    assert [item["n"] for item in done["citations"]] == [1, 2]
 
 
 def test_run_chat_keeps_used_citations_only(monkeypatch) -> None:
@@ -421,7 +470,7 @@ def test_run_chat_keeps_used_citations_only(monkeypatch) -> None:
 
     events = asyncio.run(collect())
     done = next(event for event in events if event["event"] == "done")
-    assert [item["n"] for item in done["citations"]] == [1]
+    assert [item["n"] for item in done["citations"]] == list(range(1, 9))
 
 
 def test_research_skills_enqueue_only() -> None:

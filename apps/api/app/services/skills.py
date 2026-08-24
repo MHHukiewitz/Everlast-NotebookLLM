@@ -135,17 +135,23 @@ async def _delete_matching(session: AsyncSession, notebook: Notebook, args: dict
 async def _notes_create(session: AsyncSession, notebook: Notebook, args: dict[str, Any]) -> dict[str, Any]:
     message_id = args.get("message_id")
     body = args.get("body") or ""
-    if message_id and not body:
+    citations: list[Any] = []
+    if message_id:
         message = await session.get(Message, uuid.UUID(message_id))
         if message:
-            body = message.content
+            if not body:
+                body = message.content
+            citations = list(message.citations or [])
+    payload: dict[str, Any] = {"body": body}
+    if citations:
+        payload["citations"] = citations
     artifact = Artifact(
         tenant_id=notebook.tenant_id,
         notebook_id=notebook.id,
         skill_id="notes.create",
         type="note",
         title=args.get("title") or "Neue Notiz",
-        payload={"body": body},
+        payload=payload,
         source_message_id=uuid.UUID(message_id) if message_id else None,
     )
     session.add(artifact)
@@ -221,7 +227,7 @@ REGISTRY: dict[str, Skill] = {
     ),
     "studio.audio": Skill(
         SkillCard(id="studio.audio", title="Audio-Zusammenfassung", description="Gespräch aus den gewählten Quellen", status="available", icon="audio"),
-        "Erzeugt ein Audio-Skript und Sprache aus den gewählten Quellen.",
+        "Erzeugt ein deutsches Audio-Skript und Sprache aus den gewählten Quellen.",
         {
             "type": "object",
             "properties": {
@@ -237,7 +243,7 @@ REGISTRY: dict[str, Skill] = {
     ),
     "studio.video": Skill(
         SkillCard(id="studio.video", title="Videoübersicht", description="Video aus den gewählten Quellen", status="available", icon="video"),
-        "Erzeugt Szenen, Sprache und ein Video aus den gewählten Quellen.",
+        "Erzeugt Szenen, deutsche Sprache und ein Video aus den gewählten Quellen.",
         {
             "type": "object",
             "properties": {

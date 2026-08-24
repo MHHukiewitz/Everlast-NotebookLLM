@@ -1,10 +1,25 @@
+import socket
 from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import urlparse
 
+import httpx
 from litellm import acompletion
 
 from app.config import settings
 from app.schemas import ModelCard, ProviderStatus
+
+_OPENROUTER_LABELS = {
+    "claude-sonnet-4.6": "Claude Sonnet 4.6",
+    "gpt-5.2": "GPT-5.2",
+    "gemini-2.5-pro": "Gemini 2.5 Pro",
+    "gpt-5.6-sol": "GPT-5.6 Sol",
+    "gemini-3.7-flash": "Gemini 3.7 Flash",
+    "deepseek-v4-pro": "DeepSeek V4 Pro",
+    "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "qwen3-235b-a22b-2507": "Qwen3 235B Instruct",
+    "glm-5.2": "GLM 5.2",
+}
 
 
 def _csv(value: str) -> list[str]:
@@ -23,16 +38,45 @@ def _hetzner_label(model_id: str) -> str:
     return _label(model_id)
 
 
+def _openrouter_label(model_id: str) -> str:
+    return _OPENROUTER_LABELS.get(_label(model_id), _label(model_id))
+
+
+def _is_ollama_chat_model(name: str) -> bool:
+    return "embed" not in name.lower()
+
+
+def _ollama_model_ids() -> list[str]:
+    fallback = _csv(settings.default_model)
+    parsed = urlparse(settings.ollama_api_base)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 11434
+    sock = socket.socket()
+    sock.settimeout(0.2)
+    code = sock.connect_ex((host, port))
+    sock.close()
+    if code != 0:
+        return fallback
+    response = httpx.get(f"{settings.ollama_api_base.rstrip('/')}/api/tags", timeout=0.6)
+    names: list[str] = []
+    for item in response.json().get("models") or []:
+        name = str(item.get("name") or item.get("model") or "").strip()
+        if name and _is_ollama_chat_model(name) and name not in names:
+            names.append(name)
+    return names or fallback
+
+
 class ModelRouter:
     def list_providers(self) -> list[ProviderStatus]:
         ollama_models = [
             ModelCard(
-                id=settings.default_model,
-                label=settings.default_model,
+                id=model_id,
+                label=_label(model_id),
                 provider="ollama",
                 available=True,
                 notice=None,
             )
+            for model_id in _ollama_model_ids()
         ]
         hetzner_ready = bool(settings.hetzner_api_key)
         hetzner_models = [
@@ -44,7 +88,7 @@ class ModelRouter:
             for model_id in _csv(settings.eu_llm_models)
         ]
         openrouter_models = [
-            ModelCard(id=model_id, label=_label(model_id), provider="openrouter", available=True)
+            ModelCard(id=model_id, label=_openrouter_label(model_id), provider="openrouter", available=True)
             for model_id in _csv(settings.openrouter_models)
         ]
         return [
@@ -110,7 +154,10 @@ class ModelRouter:
                 "api_base": settings.hetzner_api_base,
                 "api_key": settings.hetzner_api_key,
                 "extra_headers": {},
-                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+                "extra_body": {
+                    "enable_thinking": False,
+                    "chat_template_kwargs": {"enable_thinking": False},
+                },
             }
         if provider == "eu":
             if not settings.eu_llm_base_url or not settings.eu_llm_api_key:

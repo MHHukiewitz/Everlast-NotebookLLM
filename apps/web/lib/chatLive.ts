@@ -157,9 +157,18 @@ function splitIncompleteTool(text: string): [string, string] {
       consider(found.index);
     }
   }
-  const fences = /```(?:json)?[ \t]*\n/gi;
-  while ((found = fences.exec(text))) {
+  const jsonFences = /```json[ \t]*\n/gi;
+  while ((found = jsonFences.exec(text))) {
     if (!text.slice(found.index + found[0].length).includes("```")) {
+      consider(found.index);
+    }
+  }
+  const bareFences = /```[ \t]*\n/g;
+  while ((found = bareFences.exec(text))) {
+    const rest = text.slice(found.index + found[0].length);
+    if (rest.includes("```")) continue;
+    const stripped = rest.replace(/^\s+/, "");
+    if (!stripped || TOOL_OBJECT_START.test(rest) || isToolishPrefix(stripped)) {
       consider(found.index);
     }
   }
@@ -241,7 +250,7 @@ export function visibleChatText(text: string): string {
 }
 
 export function citationMarks(text: string): number[] {
-  return [...(text || "").matchAll(/\[(\d+)\]/g)].map((match) => Number(match[1]));
+  return [...(text || "").matchAll(/\[(\d+)\]|⟦(\d+)⟧/g)].map((match) => Number(match[1] || match[2]));
 }
 
 export function stripCitationDump(text: string): string {
@@ -252,7 +261,42 @@ export function stripCitationDump(text: string): string {
 export function usedCitations<T extends { n: number }>(text: string, citations: T[] | undefined): T[] {
   if (!citations?.length) return [];
   const used = new Set(citationMarks(text));
-  return citations.filter((item) => used.has(item.n));
+  return citations.filter((item) => used.has(Number(item.n)));
+}
+
+export function bindChatCitations<T extends { n: number; quote?: string; source_id?: string; url?: string; title?: string }>(
+  text: string,
+  citations: T[] | undefined,
+  sources?: Array<{ id: string; title?: string; origin_uri?: string | null }>,
+): Array<T & { n: number; quote: string }> {
+  const marks = [...new Set(citationMarks(text))];
+  if (!marks.length) return [];
+  const byN = new Map(
+    (citations || []).map((item, index) => {
+      const n = Number(item.n) || index + 1;
+      return [n, { ...item, n, quote: item.quote || "" }];
+    }),
+  );
+  const ready = sources || [];
+  const out: Array<T & { n: number; quote: string }> = [];
+  for (const n of marks) {
+    const found = byN.get(n);
+    if (found) {
+      out.push(found);
+      continue;
+    }
+    const source = ready[n - 1];
+    if (source) {
+      out.push({
+        n,
+        source_id: source.id,
+        quote: source.title || "",
+        title: source.title,
+        url: source.origin_uri || undefined,
+      } as T & { n: number; quote: string });
+    }
+  }
+  return out;
 }
 
 export function displayChatText(text: string): string {

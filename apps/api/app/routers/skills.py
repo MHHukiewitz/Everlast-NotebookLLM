@@ -13,7 +13,7 @@ from app.services.autoname import maybe_autoname
 from app.services.ingest import ingest_text, refresh_model_summary
 from app.services.skills import STUDIO_CATALOG, run_skill
 from app.services.studio.export import artifact_markdown, export_artifact
-from app.services.studio.media import media_file, synthesize_media_isolated
+from app.services.studio.media import media_file, remove_artifact_files, synthesize_media_isolated
 
 api = APIRouter(prefix="/api")
 
@@ -118,6 +118,21 @@ async def artifact_as_source(
         await session.commit()
     background_tasks.add_task(refresh_model_summary, source.id)
     return source
+
+
+@api.delete("/notebooks/{notebook_id}/artifacts/{artifact_id}")
+async def delete_artifact(
+    artifact_id: uuid.UUID,
+    notebook: Notebook = Depends(owned_notebook),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    artifact = await session.get(Artifact, artifact_id)
+    if artifact is None or artifact.notebook_id != notebook.id:
+        raise HTTPException(404, "Artefakt nicht gefunden")
+    remove_artifact_files(notebook.id, artifact.id)
+    await session.delete(artifact)
+    await session.commit()
+    return {"status": "deleted"}
 
 
 @api.post("/skills/{skill_id}/run")

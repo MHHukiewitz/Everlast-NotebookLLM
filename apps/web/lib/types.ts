@@ -82,6 +82,9 @@ export type ArtifactCitation = {
   source_id?: string;
   chunk_id?: string;
   quote?: string;
+  source_title?: string;
+  title?: string;
+  url?: string;
 };
 
 export type QuizQuestion = {

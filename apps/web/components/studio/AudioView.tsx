@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { CiteText, StudioCiteLinks, type StudioCiteProps } from "@/components/CiteText";
 import { api } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import type { AudioTurn } from "@/lib/types";
@@ -10,12 +11,14 @@ export function AudioView({
   artifactId,
   turns,
   status,
+  citations,
+  onCite,
 }: {
   notebookId: string;
   artifactId: string;
   turns: AudioTurn[];
   status?: string;
-}) {
+} & StudioCiteProps) {
   const [src, setSrc] = useState("");
   useEffect(() => {
     if (status !== "ready") return;
@@ -41,10 +44,17 @@ export function AudioView({
       <ol className="space-y-2 text-neutral-700">
         {turns.map((turn, index) => (
           <li key={`${turn.speaker}-${index}`}>
-            <span className="font-medium">{turn.speaker}:</span> {turn.text}
+            <span className="font-medium">{turn.speaker}:</span>{" "}
+            <CiteText text={turn.text} citations={citations} onCite={onCite} />
           </li>
         ))}
       </ol>
+      <StudioCiteLinks
+        text={turns.map((turn) => turn.text).join("\n")}
+        citations={citations}
+        onCite={onCite}
+        fallback="sources"
+      />
       <p className="mt-2 text-[11px] text-neutral-400">{t.aiBanner}</p>
     </div>
   );

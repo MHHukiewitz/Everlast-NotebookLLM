@@ -78,6 +78,7 @@ services:
       OLLAMA_API_BASE: http://ollama:11434
       SEARXNG_URL: http://searxng:8080
       TTS_LOCAL_BASE_URL: http://tts:8880
+      TTS_PIPER_VOICE_DIR: /opt/tts-voices
       LANGFUSE_HOST: http://langfuse:3000
       FILE_STORE: /data/files
     ports:
@@ -105,6 +106,7 @@ services:
       OLLAMA_API_BASE: http://ollama:11434
       SEARXNG_URL: http://searxng:8080
       TTS_LOCAL_BASE_URL: http://tts:8880
+      TTS_PIPER_VOICE_DIR: /opt/tts-voices
       LANGFUSE_HOST: http://langfuse:3000
       FILE_STORE: /data/files
     volumes:

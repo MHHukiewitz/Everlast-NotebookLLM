@@ -17,7 +17,7 @@ from app.services.tracing import score_trace
 api = APIRouter(prefix="/api/notebooks/{notebook_id}")
 
 SSE_HEADERS = {
-    "Cache-Control": "no-cache",
+    "Cache-Control": "no-cache, no-transform",
     "X-Accel-Buffering": "no",
     "Connection": "keep-alive",
 }

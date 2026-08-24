@@ -1,6 +1,7 @@
 import base64
 import shutil
 import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Artifact, Notebook
-from app.services.modalities import image_ready, require_tts, resolve_media
+from app.services.modalities import image_ready, require_tts, resolve_media, tts_language_code
+from app.services.piper_tts import synthesize_wav
 from app.services.pdf import AI_MARK
 
 PAUSE_SEC = 0.35
@@ -38,6 +40,20 @@ def artifact_dir(notebook_id: uuid.UUID) -> Path:
 
 def media_file(notebook_id: uuid.UUID, artifact_id: uuid.UUID, ext: str) -> Path:
     return artifact_dir(notebook_id) / f"{artifact_id}.{ext}"
+
+
+def remove_artifact_files(notebook_id: uuid.UUID, artifact_id: uuid.UUID) -> None:
+    folder = Path(settings.file_store) / str(notebook_id) / "artifacts"
+    if not folder.is_dir():
+        return
+    prefix = str(artifact_id)
+    for path in folder.iterdir():
+        if path.name != prefix and not path.name.startswith(f"{prefix}.") and not path.name.startswith(f"{prefix}-"):
+            continue
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
 
 
 def _run(cmd: list[str]) -> None:
@@ -66,18 +82,60 @@ def _duration(path: Path) -> float:
     return max(1.5, float(result.stdout.strip()))
 
 
-def speak(notebook: Notebook, text: str, voice: str) -> bytes:
-    route = require_tts(notebook)
+GERMAN_SPEECH_STYLE = "Sprich klar und natürlich auf Deutsch. Kein Englisch."
+ENGLISH_SPEECH_STYLE = "Speak clearly and naturally in English."
+OPENAI_TO_PIPER = {
+    "alloy": "de_DE-thorsten-medium",
+    "echo": "de_DE-thorsten-medium",
+    "onyx": "de_DE-thorsten-medium",
+    "nova": "de_DE-kerstin-low",
+    "shimmer": "de_DE-kerstin-low",
+    "coral": "de_DE-kerstin-low",
+}
+
+
+def speech_style(language: str | None) -> str:
+    if tts_language_code(language) == "en":
+        return ENGLISH_SPEECH_STYLE
+    return GERMAN_SPEECH_STYLE
+
+
+def speech_payload(route: dict[str, Any], text: str, voice: str, language: str | None = "de") -> dict[str, Any]:
+    payload = {
+        "model": route["model"],
+        "input": text,
+        "voice": voice,
+        "response_format": "mp3",
+    }
+    if route.get("provider") == "openrouter":
+        payload["instructions"] = speech_style(language)
+    return payload
+
+
+def wav_to_mp3(wav: Path) -> bytes:
+    dest = wav.with_suffix(".mp3")
+    _run(["ffmpeg", "-y", "-i", str(wav), "-q:a", "9", "-acodec", "libmp3lame", str(dest)])
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise ValueError("ffmpeg konnte die Sprachdatei nicht schreiben.")
+    return dest.read_bytes()
+
+
+def speak_piper(text: str, voice: str) -> bytes:
+    work = Path(tempfile.mkdtemp(prefix="piper-"))
+    wav = work / "speech.wav"
+    synthesize_wav(text, voice, wav)
+    return wav_to_mp3(wav)
+
+
+def speak(notebook: Notebook, text: str, voice: str, language: str | None = "de") -> bytes:
+    route = require_tts(notebook, language)
+    if route.get("model") == "piper":
+        return speak_piper(text, voice)
     with httpx.Client(timeout=120.0) as client:
         response = client.post(
             f"{route['api_base']}/audio/speech",
             headers=route["headers"],
-            json={
-                "model": route["model"],
-                "input": text,
-                "voice": voice,
-                "response_format": "mp3",
-            },
+            json=speech_payload(route, text, voice, language),
         )
     if response.status_code >= 400:
         raise ValueError(f"Sprachmodell antwortete mit {response.status_code}.")
@@ -86,10 +144,12 @@ def speak(notebook: Notebook, text: str, voice: str) -> bytes:
     return response.content
 
 
-def voice_for(speaker: str) -> str:
-    if str(speaker).strip().upper() in {"B", "2"}:
-        return settings.tts_voice_b
-    return settings.tts_voice_a
+def voice_for(speaker: str, language: str | None = "de") -> str:
+    secondary = str(speaker).strip().upper() in {"B", "2"}
+    if tts_language_code(language) == "en":
+        return settings.tts_voice_b_en if secondary else settings.tts_voice_a_en
+    raw = settings.tts_voice_b if secondary else settings.tts_voice_a
+    return OPENAI_TO_PIPER.get(raw, raw)
 
 
 def write_silence(path: Path, seconds: float = PAUSE_SEC) -> None:

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import {
   applyChatEvent,
+  bindChatCitations,
+  citationMarks,
   displayChatText,
   stepsFromReasoning,
   stripCitationDump,
@@ -8,6 +10,7 @@ import {
   visibleChatText,
   type LivePart,
 } from "./chatLive";
+import { protectCiteMarks } from "./markdown";
 
 function nextId() {
   let n = 0;
@@ -66,6 +69,11 @@ assert.equal(visibleChatText("Hallo {"), "Hallo");
 assert.equal(visibleChatText("Hallo <tool_call>"), "Hallo");
 assert.equal(visibleChatText("text\n```json\n"), "text");
 assert.equal(
+  visibleChatText("Everlast berät den Mittelstand.\n```python\nprint(1)\n"),
+  "Everlast berät den Mittelstand.\n```python\nprint(1)",
+);
+assert.equal(displayChatText("Everlast berät den Mittelstand."), "Everlast berät den Mittelstand.");
+assert.equal(
   visibleChatText('```json\n{"name": "notes_create", "arguments": {}}\n``` Rest'),
   "Rest",
 );
@@ -82,3 +90,28 @@ assert.deepEqual(
 );
 assert.deepEqual(usedCitations("Keine Zitate.", [{ n: 1, quote: "a" }]), []);
 assert.equal(displayChatText("[1] [2]\n\nHallo {"), "Hallo");
+assert.deepEqual(citationMarks("Foundation [2][4] und [5][2]."), [2, 4, 5, 2]);
+assert.deepEqual(
+  usedCitations("Foundation [2][4].", [
+    { n: "2" as unknown as number, quote: "a" },
+    { n: 4, quote: "b" },
+    { n: 9, quote: "c" },
+  ]).map((item) => Number(item.n)),
+  [2, 4],
+);
+assert.equal(protectCiteMarks("Satz [2][4] und [5]."), "Satz ⟦2⟧⟦4⟧ und ⟦5⟧.");
+const bound = bindChatCitations("Mike [2][4] und [5].", [{ n: 2, quote: "chunk two" }], [
+  { id: "s1", title: "Eins" },
+  { id: "s2", title: "Zwei" },
+  { id: "s3", title: "Drei" },
+  { id: "s4", title: "Vier" },
+  { id: "s5", title: "Fünf" },
+]);
+assert.deepEqual(
+  bound.map((item) => [item.n, item.source_id || "", item.quote]),
+  [
+    [2, "", "chunk two"],
+    [4, "s4", "Vier"],
+    [5, "s5", "Fünf"],
+  ],
+);

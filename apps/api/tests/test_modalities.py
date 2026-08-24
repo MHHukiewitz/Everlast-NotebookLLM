@@ -46,9 +46,13 @@ def test_notebook_defaults_use_hetzner_and_openrouter_image(monkeypatch: pytest.
     monkeypatch.setattr(
         "app.services.tenancy.settings.default_image_model", "google/gemini-2.5-flash-image"
     )
+    monkeypatch.setattr("app.services.tenancy.settings.default_tts_provider", "local")
+    monkeypatch.setattr("app.services.tenancy.settings.default_tts_model", "piper")
     defaults = notebook_defaults()
     assert defaults["provider"] == "hetzner"
     assert defaults["model_id"] == "Qwen/Qwen3.6-35B-A3B-FP8"
+    assert defaults["tts_provider"] == "local"
+    assert defaults["tts_model"] == "piper"
     assert defaults["image_provider"] == "openrouter"
     assert defaults["image_model"] == "google/gemini-2.5-flash-image"
     assert defaults["openrouter_notice_accepted"] is True
@@ -70,5 +74,6 @@ def test_image_request_openrouter(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_require_tts_uses_notebook(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.services.modalities.host_open", lambda _url: True)
     notebook = SimpleNamespace(tts_provider="local", tts_model="kokoro")
-    route = require_tts(notebook)  # type: ignore[arg-type]
+    route = require_tts(notebook, "en")  # type: ignore[arg-type]
     assert route["model"] == "kokoro"
+    assert route["provider"] == "local"

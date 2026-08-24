@@ -18,6 +18,7 @@ Vier bis sechs Fragen. Jede Frage hat genau vier Antwortoptionen.
 Die richtige Antwort muss im Quellenkontext stehen.
 Nutze die echten Zahlen aus den Quellen. Die Architektur hat sechs Schichten, nicht vier.
 Wenn der Kontext Ollama, vLLM oder TGI nennt, muss mindestens eine Frage oder Erklärung diesen Namen nutzen.
+Hänge Zitate [n] an die Erklärung. n ist die Nummer im Quellenkontext.
 Erfinde keine Fakten.
 Antworte nur mit einem JSON-Objekt.
 Schema: {"title": "string", "questions": [{"question": "string", "choices": ["string", "string", "string", "string"], "answer_index": 0, "explanation": "string"}]}

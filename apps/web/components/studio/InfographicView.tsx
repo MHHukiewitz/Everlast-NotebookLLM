@@ -1,5 +1,6 @@
 "use client";
 
+import { CiteText, StudioCiteLinks, type StudioCiteProps } from "@/components/CiteText";
 import { t } from "@/lib/i18n";
 import { downloadSvgAsPng, downloadSvgMarkup } from "@/lib/svgPng";
 import type { InfographicChart, InfographicItem, InfographicPoint } from "@/lib/types";
@@ -28,7 +29,11 @@ function wrapWords(text: string, width: number): string[] {
   return lines.slice(0, 6);
 }
 
-function ChartView({ chart }: { chart: InfographicChart }) {
+function ChartView({
+  chart,
+  citations,
+  onCite,
+}: { chart: InfographicChart } & StudioCiteProps) {
   const points = (chart.points || []).filter((point) => Number.isFinite(point.value));
   if (points.length < 2) return null;
   const peak = Math.max(...points.map((point) => point.value), 1);
@@ -39,7 +44,11 @@ function ChartView({ chart }: { chart: InfographicChart }) {
       {chart.type === "pie" ? <PieChart points={points} unit={unit} /> : null}
       {chart.type === "bar" ? <BarChart points={points} peak={peak} /> : null}
       {chart.type !== "pie" && chart.type !== "bar" ? <HBarChart points={points} peak={peak} unit={unit} /> : null}
-      {chart.cite && <p className="mt-2 text-[11px] text-neutral-400">{chart.cite}</p>}
+      {chart.cite && (
+        <p className="mt-2 text-[11px] text-neutral-400">
+          <CiteText text={chart.cite} citations={citations} onCite={onCite} />
+        </p>
+      )}
     </figure>
   );
 }
@@ -211,11 +220,13 @@ export function InfographicView({
   title,
   items,
   charts = [],
+  citations,
+  onCite,
 }: {
   title: string;
   items: InfographicItem[];
   charts?: InfographicChart[];
-}) {
+} & StudioCiteProps) {
   function downloadSvg() {
     downloadSvgMarkup(buildInfographicSvg(title, items, charts), `${title || "infografik"}.svg`);
   }
@@ -229,7 +240,7 @@ export function InfographicView({
       {charts.length > 0 && (
         <div className="mb-3 space-y-2">
           {charts.map((chart, index) => (
-            <ChartView key={`${chart.title}-${index}`} chart={chart} />
+            <ChartView key={`${chart.title}-${index}`} chart={chart} citations={citations} onCite={onCite} />
           ))}
         </div>
       )}
@@ -245,12 +256,20 @@ export function InfographicView({
                 {item.suffix ? <span className="text-xl font-medium text-neutral-600">{item.suffix}</span> : null}
               </p>
             ) : null}
-            {item.caption ? <p className="mt-1 text-sm text-neutral-700">{item.caption}</p> : null}
+            {item.caption ? (
+              <p className="mt-1 text-sm text-neutral-700">
+                <CiteText text={item.caption} citations={citations} onCite={onCite} />
+              </p>
+            ) : null}
             {item.value && item.value !== item.caption ? (
-              <p className={`text-sm font-semibold text-neutral-900 ${item.number ? "mt-2" : "mt-1"}`}>{item.value}</p>
+              <p className={`text-sm font-semibold text-neutral-900 ${item.number ? "mt-2" : "mt-1"}`}>
+                <CiteText text={item.value} citations={citations} onCite={onCite} />
+              </p>
             ) : null}
             {item.detail && item.detail !== item.caption ? (
-              <p className="mt-1 text-xs leading-5 text-neutral-600">{item.detail}</p>
+              <p className="mt-1 text-xs leading-5 text-neutral-600">
+                <CiteText text={item.detail} citations={citations} onCite={onCite} />
+              </p>
             ) : null}
           </article>
         ))}
@@ -263,6 +282,15 @@ export function InfographicView({
           {t.downloadPng}
         </button>
       </div>
+      <StudioCiteLinks
+        text={[
+          ...items.flatMap((item) => [item.label, item.value, item.detail || "", item.caption || ""]),
+          ...charts.flatMap((chart) => [chart.title, chart.cite || ""]),
+        ].join("\n")}
+        citations={citations}
+        onCite={onCite}
+        fallback="sources"
+      />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CitationChips } from "@/components/CitationChips";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { ToolCallCard } from "@/components/chat/ToolCallCard";
 import { SiteFooter } from "@/components/SiteFooter";
@@ -15,7 +16,7 @@ import {
   displayChatText,
   stepsFromReasoning,
   toolCallsFromMessage,
-  usedCitations,
+  bindChatCitations,
   type LivePart,
 } from "@/lib/chatLive";
 import { ThinkingTrace } from "@/components/chat/ThinkingTrace";
@@ -37,29 +38,9 @@ import type {
   SourceDetail,
 } from "@/lib/types";
 
-function CitationChips({
-  citations,
-  onCite,
-}: {
-  citations: MessageCitation[];
-  onCite: (cite: MessageCitation) => void;
-}) {
-  if (!citations.length) return null;
-  return (
-    <div className="mt-2 flex flex-wrap gap-1">
-      {citations.map((cite) => (
-        <button
-          key={`${cite.n}-${cite.chunk_id || cite.url || cite.title}`}
-          type="button"
-          className="rounded bg-blue-50 px-1.5 text-xs text-accent"
-          title={cite.quote}
-          onClick={() => onCite(cite)}
-        >
-          [{cite.n}]
-        </button>
-      ))}
-    </div>
-  );
+function pickLaneModel(lane: Provider | undefined, current: string) {
+  if (lane?.models.some((model) => model.id === current)) return current;
+  return lane?.models[0]?.id || current;
 }
 
 function SourceIcon({ origin, favicon }: { origin: string | null | undefined; favicon?: string | null }) {
@@ -97,6 +78,11 @@ export default function Page() {
   const [studioSkill, setStudioSkill] = useState<Skill | null>(null);
   const [pendingStudio, setPendingStudio] = useState<{ skillId: string; title: string; type: string } | null>(null);
   const studioListRef = useRef<HTMLDivElement>(null);
+  const chatListRef = useRef<HTMLDivElement>(null);
+  const pinChatToBottom = useRef(true);
+  const chatSettingsSeq = useRef(0);
+  const chatSettingsChoice = useRef<{ provider: string; model_id: string; openrouter_notice_accepted?: boolean } | null>(null);
+  const chatSettingsTail = useRef(Promise.resolve());
   const [studioSourceIds, setStudioSourceIds] = useState<string[]>([]);
   const [studioPrompt, setStudioPrompt] = useState("");
   const [mediaFormat, setMediaFormat] = useState<"briefing" | "explainer">("briefing");
@@ -134,7 +120,11 @@ export default function Page() {
   const [researchBusy, setResearchBusy] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
 
-  const selectedCount = useMemo(() => sources.filter((s) => s.selected && s.status === "ready").length, [sources]);
+  const selectedReady = useMemo(
+    () => sources.filter((item) => item.selected && item.status === "ready"),
+    [sources],
+  );
+  const selectedCount = selectedReady.length;
   const sortedSources = useMemo(() => sortSources(sources, sourceSort), [sources, sourceSort]);
   const pendingMedia = useMemo(
     () => artifacts.some((artifact) => artifact.payload?.status === "pending"),
@@ -450,10 +440,30 @@ export default function Page() {
     }
   }
 
+  function scrollChatToBottom() {
+    const scroller = chatListRef.current;
+    if (!scroller || !pinChatToBottom.current) return;
+    scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  function onChatScroll() {
+    const scroller = chatListRef.current;
+    if (!scroller) return;
+    pinChatToBottom.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 80;
+  }
+
+  useEffect(() => {
+    if (!pinChatToBottom.current) return;
+    scrollChatToBottom();
+    const frame = window.requestAnimationFrame(scrollChatToBottom);
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, liveParts, busy]);
+
   async function onSend(text?: string) {
     if (!notebook || busy) return;
     const content = (text || chatInput).trim();
     if (!content) return;
+    pinChatToBottom.current = true;
     setChatInput("");
     setLiveParts([]);
     setLiveCitations([]);
@@ -498,8 +508,10 @@ export default function Page() {
     setBusy(false);
   }
 
-  const hetznerLane = (modalities?.llm || providers).find((lane) => lane.id === "hetzner");
-  const openrouterLane = (modalities?.llm || providers).find((lane) => lane.id === "openrouter");
+  const llmLanes = modalities?.llm || providers;
+  const hetznerLane = llmLanes.find((lane) => lane.id === "hetzner");
+  const openrouterLane = llmLanes.find((lane) => lane.id === "openrouter");
+  const chatLane = llmLanes.find((lane) => lane.id === notebook?.provider);
 
   function providerLabel(id: string) {
     if (id === "ollama") return t.local;
@@ -514,10 +526,46 @@ export default function Page() {
     return undefined;
   }
 
+  async function writeChatSettings(choice: { provider: string; model_id: string; openrouter_notice_accepted?: boolean }) {
+    if (!notebook) return;
+    chatSettingsChoice.current = choice;
+    const seq = ++chatSettingsSeq.current;
+    const notebookId = notebook.id;
+    const previous = chatSettingsTail.current;
+    let release = () => {};
+    chatSettingsTail.current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    if (seq !== chatSettingsSeq.current) {
+      release();
+      return;
+    }
+    const latest = chatSettingsChoice.current || choice;
+    const saved = await api.updateNotebook(notebookId, {
+      provider: latest.provider,
+      model_id: latest.model_id,
+      openrouter_notice_accepted: latest.openrouter_notice_accepted,
+    });
+    if (seq === chatSettingsSeq.current) setNotebook(saved);
+    release();
+  }
+
+  async function onChatModel(model: string) {
+    if (!notebook) return;
+    const currentModel = chatSettingsChoice.current?.model_id || notebook.model_id;
+    if (currentModel === model) return;
+    const provider = chatSettingsChoice.current?.provider || notebook.provider;
+    setNotebook({ ...notebook, provider, model_id: model });
+    await writeChatSettings({ provider, model_id: model });
+  }
+
   async function onInference(provider: "ollama" | "hetzner" | "openrouter") {
-    if (!notebook || notebook.provider === provider) return;
-    const lane = (modalities?.llm || providers).find((item) => item.id === provider);
-    const model = lane?.models[0]?.id || notebook.model_id;
+    if (!notebook) return;
+    const currentProvider = chatSettingsChoice.current?.provider || notebook.provider;
+    if (currentProvider === provider) return;
+    const lane = llmLanes.find((item) => item.id === provider);
+    const model = pickLaneModel(lane, notebook.model_id);
     const next = {
       ...notebook,
       provider,
@@ -526,12 +574,11 @@ export default function Page() {
     };
     if (provider === "openrouter") setOrOk(true);
     setNotebook(next);
-    const saved = await api.updateNotebook(notebook.id, {
+    await writeChatSettings({
       provider,
       model_id: model,
       openrouter_notice_accepted: provider === "openrouter" ? true : undefined,
     });
-    setNotebook(saved);
   }
 
   async function saveSettings() {
@@ -667,9 +714,20 @@ export default function Page() {
                 {t.openrouter}
               </button>
             </div>
-            <span className="rounded-full bg-mist px-3 py-1 text-xs" title={providerHint(notebook.provider)}>
-              {providerLabel(notebook.provider)} · {notebook.model_id.split("/").pop()}
-            </span>
+            <select
+              className="max-w-48 rounded-full bg-mist px-3 py-1 text-xs"
+              aria-label={t.modelSelect}
+              title={providerHint(notebook.provider)}
+              disabled={!chatLane?.available || chatLane.models.length === 0}
+              value={pickLaneModel(chatLane, notebook.model_id)}
+              onChange={(e) => onChatModel(e.target.value)}
+            >
+              {(chatLane?.models || []).map((model) => (
+                <option key={model.id} value={model.id}>
+                  {providerLabel(notebook.provider)} · {model.label}
+                </option>
+              ))}
+            </select>
           </div>
           <a className="btn" href="/eval">
             Eval
@@ -937,7 +995,7 @@ export default function Page() {
           <div className="flex items-center justify-between px-4 py-3">
             <h2 className="font-medium">{t.chat}</h2>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto px-6">
+          <div ref={chatListRef} className="min-h-0 flex-1 overflow-auto px-6" onScroll={onChatScroll}>
             {messages.length === 0 && liveParts.length === 0 ? (
               <div className="mx-auto max-w-xl pt-16 text-center">
                 <h3 className="text-2xl font-medium">{t.setup}</h3>
@@ -971,7 +1029,11 @@ export default function Page() {
                           .map((tool) => <ToolCallCard key={tool.call_id} tool={tool} />)}
                       {message.content ? (
                         <MarkdownBody
-                          citations={usedCitations(displayChatText(message.content), message.citations)}
+                          citations={bindChatCitations(
+                            displayChatText(message.content),
+                            message.citations,
+                            selectedReady,
+                          )}
                           onCite={openCite}
                         >
                           {displayChatText(message.content)}
@@ -979,7 +1041,11 @@ export default function Page() {
                       ) : null}
                       {message.role === "assistant" ? (
                         <CitationChips
-                          citations={usedCitations(displayChatText(message.content), message.citations)}
+                          citations={bindChatCitations(
+                            displayChatText(message.content),
+                            message.citations,
+                            selectedReady,
+                          )}
                           onCite={openCite}
                         />
                       ) : null}
@@ -1026,7 +1092,7 @@ export default function Page() {
                           return (
                             <MarkdownBody
                               key={part.id}
-                              citations={usedCitations(liveText, liveCitations)}
+                              citations={bindChatCitations(liveText, liveCitations, selectedReady)}
                               onCite={openCite}
                             >
                               {liveText}
@@ -1034,7 +1100,7 @@ export default function Page() {
                           );
                         })}
                       <CitationChips
-                        citations={usedCitations(
+                        citations={bindChatCitations(
                           displayChatText(
                             liveParts
                               .filter((part): part is Extract<LivePart, { kind: "text" }> => part.kind === "text")
@@ -1042,6 +1108,7 @@ export default function Page() {
                               .join(""),
                           ),
                           liveCitations,
+                          selectedReady,
                         )}
                         onCite={openCite}
                       />
@@ -1092,12 +1159,21 @@ export default function Page() {
           <div className="px-4 py-3">
             <h2 className="font-medium">{t.studio}</h2>
           </div>
-          <div className="grid grid-cols-2 gap-2 px-4">
-            {skills.map((skill) => (
-              <StudioSkillButton key={skill.id} skill={skill} busy={busy} onRun={onRunSkill} />
-            ))}
-          </div>
-          <div ref={studioListRef} className="min-h-0 flex-1 overflow-auto px-4 py-4 text-sm">
+          <div ref={studioListRef} className="min-h-0 flex-1 overflow-auto px-4 py-3 text-sm">
+            <div className="studio-skills">
+              {skills.map((skill) => (
+                <StudioSkillButton
+                  key={skill.id}
+                  skill={skill}
+                  busy={busy}
+                  active={
+                    pendingStudio?.skillId === skill.id ||
+                    (!pendingStudio && artifacts[0]?.skill_id === skill.id)
+                  }
+                  onRun={onRunSkill}
+                />
+              ))}
+            </div>
             {studioError && <p className="mb-3 text-xs text-red-600">{studioError}</p>}
             {artifacts.length === 0 && !pendingStudio ? (
               <p className="text-neutral-500">
@@ -1124,16 +1200,21 @@ export default function Page() {
                     key={artifact.id}
                     artifact={artifact}
                     notebookId={notebook.id}
+                    sources={sources}
+                    onCite={openCite}
                     onImported={async () => {
                       await refresh(notebook.id);
                       await syncNotebook(notebook.id);
+                    }}
+                    onDeleted={() => {
+                      setArtifacts((list) => list.filter((item) => item.id !== artifact.id));
                     }}
                   />
                 ))}
               </ul>
             )}
           </div>
-          <div className="p-4">
+          <div className="border-t border-line p-4">
             <button className="btn-primary w-full" onClick={() => setNoteOpen(true)}>
               + {t.addNote}
             </button>
@@ -1237,7 +1318,7 @@ export default function Page() {
               modelId={notebook.model_id}
               name="llm"
               onProvider={(id, model) => setNotebook({ ...notebook, provider: id, model_id: model })}
-              onModel={(model) => setNotebook({ ...notebook, model_id: model })}
+              onModel={(model) => void onChatModel(model)}
             />
             <ModalityBlock
               title={t.speechModel}
@@ -1347,15 +1428,17 @@ function ModalityBlock({
                 name={name}
                 checked={provider === lane.id}
                 disabled={!lane.available}
-                onChange={() => onProvider(lane.id, lane.models[0]?.id || modelId)}
+                onChange={() => onProvider(lane.id, pickLaneModel(lane, modelId))}
               />
               {lane.label}
             </label>
             <p className="mt-1 text-xs text-neutral-500">{lane.notice}</p>
-            {lane.models.length > 0 && provider === lane.id && (
+            {provider === lane.id && (
               <select
                 className="mt-2 w-full rounded border border-line p-1"
-                value={modelId}
+                aria-label={t.modelSelect}
+                value={pickLaneModel(lane, modelId)}
+                disabled={!lane.available || lane.models.length === 0}
                 onChange={(e) => onModel(e.target.value)}
               >
                 {lane.models.map((model) => (

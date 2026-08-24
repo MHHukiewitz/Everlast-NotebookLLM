@@ -20,6 +20,8 @@ Setze number nur, wenn die Quellen diese Zahl nennen.
 charts: nur wenn die Anweisung ein Diagramm verlangt und die Quellen vergleichbare Zahlen derselben Einheit nennen.
 Erlaubte charts[].type: bar (Säulen), hbar (Balken), pie (Kreis).
 Jedes Diagramm braucht title, unit, cite und mindestens zwei points mit label und value.
+cite ist die Quellennummer wie [1].
+Hänge Zitate [n] an caption oder detail, wenn ein Fakt aus einer Quelle stammt.
 Keine erfundenen Zahlen. Ohne gültiges Diagramm: charts = [].
 """
 

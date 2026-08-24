@@ -1,9 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { StudioCiteLinks } from "@/components/CiteText";
+import { MarkdownBody } from "@/components/MarkdownBody";
 import { api } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import type { Artifact } from "@/lib/types";
+import { artifactCitationMap } from "@/lib/studioCitations";
+import type { Artifact, MessageCitation, Source } from "@/lib/types";
 import { AudioView } from "./AudioView";
 import { FlashcardsView } from "./FlashcardsView";
 import { InfographicView } from "./InfographicView";
@@ -45,18 +48,25 @@ export function ArtifactCard({
   artifact,
   notebookId,
   onImported,
+  onDeleted,
   loading = false,
+  sources,
+  onCite,
 }: {
   artifact: Artifact;
   notebookId: string;
   onImported?: () => void;
+  onDeleted?: () => void;
   loading?: boolean;
+  sources?: Source[];
+  onCite?: (cite: MessageCitation) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
   const formats = EXPORTS[artifact.type] || [];
+  const citations = artifactCitationMap(artifact.payload || {}, sources);
   if (loading) {
     return (
       <li className="rounded-lg border border-accent bg-mist p-3">
@@ -88,31 +98,79 @@ export function ArtifactCard({
       onImported?.();
     }
   }
+
+  async function remove() {
+    await api.deleteArtifact(notebookId, artifact.id);
+    onDeleted?.();
+  }
+
   return (
     <li className="rounded-lg border border-line p-3">
-      <button className="w-full text-left" onClick={() => setOpen((value) => !value)}>
-        <div className="font-medium">{artifact.title}</div>
-        <div className="text-[11px] uppercase tracking-wide text-neutral-400">{artifact.type}</div>
-        {!open && <p className="mt-1 line-clamp-4 text-xs text-neutral-600">{preview(artifact)}</p>}
-      </button>
+      <div className="flex items-start gap-2">
+        <button className="min-w-0 flex-1 text-left" onClick={() => setOpen((value) => !value)}>
+          <div className="font-medium">{artifact.title}</div>
+          <div className="text-[11px] uppercase tracking-wide text-neutral-400">{artifact.type}</div>
+          {!open && <p className="mt-1 line-clamp-4 text-xs text-neutral-600">{preview(artifact)}</p>}
+        </button>
+        <button
+          className="mt-0.5 shrink-0 px-1 text-neutral-400 hover:text-red-600"
+          title={t.removeArtifact}
+          type="button"
+          onClick={remove}
+        >
+          ×
+        </button>
+      </div>
       {open && (
         <div className="mt-2">
-          {artifact.type === "note" && <p className="text-xs text-neutral-600">{artifact.payload.body}</p>}
-          {artifact.type === "report" && <ReportView body={artifact.payload.body_md || ""} />}
+          {artifact.type === "note" && (
+            <div className="text-xs text-neutral-600">
+              <MarkdownBody citations={citations} onCite={onCite}>
+                {artifact.payload.body || ""}
+              </MarkdownBody>
+              <StudioCiteLinks
+                text={artifact.payload.body || ""}
+                citations={citations}
+                onCite={onCite}
+                fallback="sources"
+              />
+            </div>
+          )}
+          {artifact.type === "report" && (
+            <ReportView body={artifact.payload.body_md || ""} citations={citations} onCite={onCite} />
+          )}
           {artifact.type === "mindmap" && (
-            <MindmapView source={artifact.payload.mermaid || ""} title={artifact.title} />
+            <MindmapView
+              source={artifact.payload.mermaid || ""}
+              title={artifact.title}
+              citations={citations}
+              onCite={onCite}
+            />
           )}
-          {artifact.type === "quiz" && <QuizView questions={artifact.payload.questions || []} />}
-          {artifact.type === "flashcards" && <FlashcardsView cards={artifact.payload.cards || []} />}
+          {artifact.type === "quiz" && (
+            <QuizView questions={artifact.payload.questions || []} citations={citations} onCite={onCite} />
+          )}
+          {artifact.type === "flashcards" && (
+            <FlashcardsView cards={artifact.payload.cards || []} citations={citations} onCite={onCite} />
+          )}
           {artifact.type === "table" && (
-            <TableView columns={artifact.payload.columns || []} rows={artifact.payload.rows || []} />
+            <TableView
+              columns={artifact.payload.columns || []}
+              rows={artifact.payload.rows || []}
+              citations={citations}
+              onCite={onCite}
+            />
           )}
-          {artifact.type === "slides" && <SlidesView slides={artifact.payload.slides || []} />}
+          {artifact.type === "slides" && (
+            <SlidesView slides={artifact.payload.slides || []} citations={citations} onCite={onCite} />
+          )}
           {artifact.type === "infographic" && (
             <InfographicView
               title={artifact.title}
               items={artifact.payload.items || []}
               charts={artifact.payload.charts || []}
+              citations={citations}
+              onCite={onCite}
             />
           )}
           {artifact.type === "audio" && (
@@ -121,6 +179,8 @@ export function ArtifactCard({
               artifactId={artifact.id}
               turns={artifact.payload.turns || []}
               status={artifact.payload.status}
+              citations={citations}
+              onCite={onCite}
             />
           )}
           {artifact.type === "video" && (
@@ -129,6 +189,8 @@ export function ArtifactCard({
               artifactId={artifact.id}
               scenes={artifact.payload.scenes || []}
               status={artifact.payload.status}
+              citations={citations}
+              onCite={onCite}
             />
           )}
           {formats.length > 0 && (

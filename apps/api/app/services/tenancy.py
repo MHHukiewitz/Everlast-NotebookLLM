@@ -35,6 +35,8 @@ def notebook_defaults() -> dict:
     return {
         "provider": settings.default_provider,
         "model_id": settings.default_model,
+        "tts_provider": settings.default_tts_provider,
+        "tts_model": settings.default_tts_model,
         "image_provider": image_provider,
         "image_model": settings.default_image_model,
         "openrouter_notice_accepted": image_provider == "openrouter",

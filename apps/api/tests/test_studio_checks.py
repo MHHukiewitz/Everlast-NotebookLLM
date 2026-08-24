@@ -69,7 +69,9 @@ def test_prepare_report_needs_cite() -> None:
     assert prepare_report({"body_md": "Kurz"})[0] is False
     long_body = "Ingest holt Dokumente. Embeddings bleiben lokal. " * 3
     assert prepare_report({"body_md": long_body})[0] is False
-    assert prepare_report({"body_md": long_body + " Siehe [1]."}) == (True, "")
+    payload = {"body_md": long_body + " Siehe [1].", "citations": [{"n": 1, "source_id": "s1"}]}
+    assert prepare_report(payload) == (True, "")
+    assert payload["citations"][0]["n"] == 1
 
 
 def test_prepare_audio_and_video() -> None:

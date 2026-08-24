@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { StudioCiteLinks, type StudioCiteProps } from "@/components/CiteText";
 import { t } from "@/lib/i18n";
 import {
   edgePath,
@@ -15,7 +16,12 @@ export { normalizeMermaid };
 
 const FILLS = ["#eff6ff", "#f5f3ff", "#f0fdf4", "#fff7ed"];
 
-export function MindmapView({ source, title }: { source: string; title?: string }) {
+export function MindmapView({
+  source,
+  title,
+  citations,
+  onCite,
+}: { source: string; title?: string } & StudioCiteProps) {
   const paneRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [paneWidth, setPaneWidth] = useState(400);
@@ -121,6 +127,7 @@ export function MindmapView({ source, title }: { source: string; title?: string 
         <summary>Mermaid</summary>
         <pre className="mt-1 whitespace-pre-wrap">{normalized || source}</pre>
       </details>
+      <StudioCiteLinks text={normalized || source} citations={citations} onCite={onCite} fallback="sources" />
     </div>
   );
 }

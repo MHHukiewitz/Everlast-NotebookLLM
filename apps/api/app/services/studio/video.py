@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Artifact, Notebook
-from app.services.modalities import require_tts
+from app.services.modalities import require_tts, tts_language_code
 from app.services.studio.generate import EVAL_MODE, STUDIO_USER, generate_json, save_artifact, source_ids_from_args, topic_from_args
 from app.services.studio.media import (
     artifact_dir,
@@ -27,6 +27,8 @@ Jede Szene hat eine Überschrift, drei bis fünf Stichpunkte und einen kurzen Sp
 Jede Szene nennt einen Fakt aus dem Quellenkontext.
 Keine Begrüßung ohne Fakt.
 Erfinde keine Fakten.
+Überschrift, Stichpunkte und Sprechertext sind vollständig auf {language}.
+Keine englischen Sätze, außer ein Quellen-Zitat ist auf Englisch.
 Antworte nur mit einem JSON-Objekt.
 Schema: {{"title": "string", "scenes": [{{"heading": "string", "bullets": ["string"], "narration": "string"}}]}}
 Sprache: {language}.
@@ -39,13 +41,15 @@ Jede Szene hat eine Überschrift, drei bis fünf Stichpunkte und einen Sprechert
 Jede Szene nennt einen Fakt aus dem Quellenkontext.
 Keine Begrüßung ohne Fakt.
 Erfinde keine Fakten.
+Überschrift, Stichpunkte und Sprechertext sind vollständig auf {language}.
+Keine englischen Sätze, außer ein Quellen-Zitat ist auf Englisch.
 Antworte nur mit einem JSON-Objekt.
 Schema: {{"title": "string", "scenes": [{{"heading": "string", "bullets": ["string"], "narration": "string"}}]}}
 Sprache: {language}.
 """
 
 def _language_label(code: str) -> str:
-    return "Englisch" if code == "en" else "Deutsch"
+    return "Englisch" if tts_language_code(code) == "en" else "Deutsch"
 
 
 def prepare_video(payload: dict[str, Any], min_scenes: int = 4) -> tuple[bool, str]:
@@ -77,12 +81,13 @@ def prepare_video(payload: dict[str, Any], min_scenes: int = 4) -> tuple[bool, s
 async def create_video(
     session: AsyncSession, notebook: Notebook, args: dict[str, Any]
 ) -> dict[str, Any]:
+    language_code = tts_language_code(str(args.get("language") or "de"))
     if not EVAL_MODE.get():
-        require_tts(notebook)
+        require_tts(notebook, language_code)
         require_ffmpeg()
     topic = topic_from_args(args)
     fmt = str(args.get("format") or "briefing")
-    language = _language_label(str(args.get("language") or "de"))
+    language = _language_label(language_code)
     style = str(args.get("style") or "auto")
     system = (SYSTEM_EXPLAINER if fmt == "explainer" else SYSTEM_BRIEFING).format(language=language)
     min_scenes = 6 if fmt == "explainer" else 4
@@ -97,14 +102,15 @@ async def create_video(
     )
     title = str(payload.get("title") or "Videoübersicht")
     payload["format"] = fmt
-    payload["language"] = str(args.get("language") or "de")
+    payload["language"] = language_code
     payload["style"] = style
     payload["status"] = "ready" if EVAL_MODE.get() else "pending"
     return await save_artifact(session, notebook, "studio.video", "video", title, payload)
 
 
 async def synthesize_video(session: AsyncSession, notebook: Notebook, artifact: Artifact) -> None:
-    require_tts(notebook)
+    language = tts_language_code(str((artifact.payload or {}).get("language") or "de"))
+    require_tts(notebook, language)
     require_ffmpeg()
     scenes = artifact.payload.get("scenes") or []
     style = str(artifact.payload.get("style") or "auto")
@@ -117,7 +123,7 @@ async def synthesize_video(session: AsyncSession, notebook: Notebook, artifact: 
         bullets = [str(item) for item in scene.get("bullets") or []]
         narration = str(scene.get("narration") or "").strip() or heading
         clip = work / f"{index:03d}.mp3"
-        clip.write_bytes(speak(notebook, narration, voice_for("A")))
+        clip.write_bytes(speak(notebook, narration, voice_for("A", language), language))
         clips.append(clip)
         frame = work / f"{index:03d}.png"
         write_frame(notebook, heading, bullets, style, frame)

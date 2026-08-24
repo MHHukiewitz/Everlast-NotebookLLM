@@ -25,7 +25,9 @@ async def lifespan(_: FastAPI):
         await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS raw_output TEXT DEFAULT ''"))
         await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS reasoning JSONB DEFAULT '[]'::jsonb"))
         await conn.execute(text("ALTER TABLE notebooks ADD COLUMN IF NOT EXISTS tts_provider VARCHAR(32) DEFAULT 'local'"))
-        await conn.execute(text("ALTER TABLE notebooks ADD COLUMN IF NOT EXISTS tts_model VARCHAR(255) DEFAULT 'kokoro'"))
+        await conn.execute(text("ALTER TABLE notebooks ADD COLUMN IF NOT EXISTS tts_model VARCHAR(255) DEFAULT 'piper'"))
+        await conn.execute(text("ALTER TABLE notebooks ALTER COLUMN tts_provider SET DEFAULT 'local'"))
+        await conn.execute(text("ALTER TABLE notebooks ALTER COLUMN tts_model SET DEFAULT 'piper'"))
         await conn.execute(text("ALTER TABLE notebooks ADD COLUMN IF NOT EXISTS image_provider VARCHAR(32) DEFAULT 'local'"))
         await conn.execute(text("ALTER TABLE notebooks ADD COLUMN IF NOT EXISTS image_model VARCHAR(255) DEFAULT 'flux'"))
     async with SessionLocal() as session:

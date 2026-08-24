@@ -33,7 +33,7 @@ class Notebook(Base):
     provider: Mapped[str] = mapped_column(String(32), default="hetzner")
     model_id: Mapped[str] = mapped_column(String(255), default="Qwen/Qwen3.6-35B-A3B-FP8")
     tts_provider: Mapped[str] = mapped_column(String(32), default="local")
-    tts_model: Mapped[str] = mapped_column(String(255), default="kokoro")
+    tts_model: Mapped[str] = mapped_column(String(255), default="piper")
     image_provider: Mapped[str] = mapped_column(String(32), default="openrouter")
     image_model: Mapped[str] = mapped_column(String(255), default="google/gemini-2.5-flash-image")
     eu_notice_accepted: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -61,6 +61,8 @@ _TOOL_NAME_HOLD = re.compile(
 )
 _TOOL_CALL_OPEN = re.compile(r"<tool_call>", re.I)
 _FENCE_OPEN = re.compile(r"```(?:json)?[ \t]*\n", re.I)
+_JSON_FENCE_OPEN = re.compile(r"```json[ \t]*\n", re.I)
+_BARE_FENCE_OPEN = re.compile(r"```[ \t]*\n")
 _CITE_MARK = re.compile(r"\[(\d+)\]")
 _DUMP_LINE = re.compile(r"^\s*(?:\[\d+\]\s*)+$")
 _TOOL_KEY_PREFIX = re.compile(r'\{\s*"([A-Za-z_]*)"?\s*:?')
@@ -142,17 +144,30 @@ def tool_result_detail(skill_id: str, args: dict[str, Any], result: Any) -> str:
 def thinking_text(delta: Any) -> str:
     if delta is None:
         return ""
-    for attr in ("reasoning_content", "thinking"):
+    for attr in ("reasoning_content", "reasoning", "thinking"):
         value = getattr(delta, attr, None)
         if value:
             return str(value)
     extra = getattr(delta, "model_extra", None) or {}
     if isinstance(extra, dict):
-        for key in ("reasoning_content", "thinking"):
+        for key in ("reasoning_content", "reasoning", "thinking"):
             value = extra.get(key)
             if value:
                 return str(value)
     return ""
+
+
+def join_system(*parts: str) -> str:
+    return "\n\n".join(part.strip() for part in parts if part and str(part).strip())
+
+
+def delta_stream_parts(delta: Any, provider: str) -> tuple[str, str]:
+    think = thinking_text(delta)
+    raw = getattr(delta, "content", None) if delta is not None else None
+    content = str(raw) if raw else ""
+    if provider == "hetzner":
+        return "", content or think
+    return think, content
 
 
 def step_event(
@@ -398,8 +413,15 @@ def split_incomplete_tool(text: str) -> tuple[str, str]:
     for found in _TOOL_CALL_OPEN.finditer(text):
         if re.search(r"</tool_call>", text[found.end() :], re.I) is None:
             consider(found.start())
-    for found in _FENCE_OPEN.finditer(text):
+    for found in _JSON_FENCE_OPEN.finditer(text):
         if "```" not in text[found.end() :]:
+            consider(found.start())
+    for found in _BARE_FENCE_OPEN.finditer(text):
+        rest = text[found.end() :]
+        if "```" in rest:
+            continue
+        stripped = rest.lstrip()
+        if not stripped or _TOOL_OBJECT_START.search(rest) or _is_toolish_prefix(stripped):
             consider(found.start())
     fence_tail = re.search(r"```(?:json)?\s*$", text, re.I)
     if fence_tail:
@@ -440,7 +462,8 @@ def used_citations(text: str, citation_map: list[dict[str, Any]]) -> list[dict[s
 
 def finalize_answer(text: str, citation_map: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
     cleaned = strip_citation_dump(text)
-    return cleaned, used_citations(cleaned, citation_map)
+    used = used_citations(cleaned, citation_map)
+    return cleaned, used or citation_map
 
 
 def skipped_tool_record(call_id: str, skill_id: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -769,11 +792,13 @@ async def run_chat(
                 "source_id": chunk["source_id"],
                 "chunk_id": chunk["chunk_id"],
                 "quote": chunk["text"][:280],
+                "title": chunk["source_title"],
             }
         )
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM}]
+    system = SYSTEM
     if context_blocks:
-        messages.append({"role": "system", "content": "Quellenkontext:\n" + "\n\n".join(context_blocks)})
+        system = join_system(SYSTEM, "Quellenkontext:\n" + "\n\n".join(context_blocks))
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     if use_history:
         history_rows = (
             await session.execute(
@@ -933,7 +958,8 @@ async def run_chat(
     if mutated_sources:
         citation_map = []
 
-    assistant_text, citation_map = finalize_answer(assistant_text, citation_map)
+    assistant_text, used = finalize_answer(assistant_text, citation_map)
+    citation_map = citation_map or used
     faith = overlap_score(assistant_text, chunks) if chunks and not mutated_sources else 1.0
     if chunks and not mutated_sources and faith < 0.12:
         yield {"event": "warning", "text": "Antwort weicht stark von den zitierten Chunks ab."}
@@ -1066,10 +1092,9 @@ async def _stream_pass(
         delta = chunk.choices[0].delta
         if delta is None:
             continue
-        think = thinking_text(delta)
+        think, content = delta_stream_parts(delta, notebook.provider)
         if think:
             yield {"event": "think", "text": think}
-        content = getattr(delta, "content", None)
         if content:
             hold += content
             cleaned, leaked = extract_leaked_tools(hold)
@@ -1291,8 +1316,7 @@ async def run_chat_resume(
         return
 
     messages = [
-        {"role": "system", "content": RESUME_SYSTEM},
-        {"role": "system", "content": scratch},
+        {"role": "system", "content": join_system(RESUME_SYSTEM, scratch)},
         {"role": "user", "content": job.query},
     ]
     trace_id = start_trace("chat_research", notebook.tenant_id, {"notebook_id": str(notebook.id), "job_id": str(job.id)})
@@ -1311,10 +1335,9 @@ async def run_chat_resume(
         delta = chunk.choices[0].delta
         if delta is None:
             continue
-        think = thinking_text(delta)
+        think, content = delta_stream_parts(delta, notebook.provider)
         if think:
             yield {"event": "think", "text": think}
-        content = getattr(delta, "content", None)
         if content:
             assistant_text += content
             raw_output += content
@@ -1325,7 +1348,8 @@ async def run_chat_resume(
     write = step_event("write", "Antwort schreiben", step_id=WRITE_STEP_ID)
     record_step(reasoning, write)
     yield write
-    assistant_text, citation_map = finalize_answer(assistant_text, citation_map)
+    assistant_text, used = finalize_answer(assistant_text, citation_map)
+    citation_map = citation_map or used
     assistant = await _save_assistant(
         session,
         notebook,

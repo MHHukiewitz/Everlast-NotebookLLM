@@ -1,9 +1,24 @@
 notebook.hukiewitz.com {
-	encode gzip
+	encode gzip {
+		match {
+			header Content-Type text/html*
+			header Content-Type text/plain*
+			header Content-Type text/css*
+			header Content-Type text/javascript*
+			header Content-Type application/javascript*
+			header Content-Type application/json*
+			header Content-Type application/xml*
+			header Content-Type image/svg+xml*
+			header Content-Type font/*
+			header Content-Type application/wasm*
+		}
+	}
 
 	handle /api/* {
 		reverse_proxy api:8000 {
 			flush_interval -1
+			header_down X-Accel-Buffering no
+			header_down Cache-Control "no-cache, no-transform"
 			transport http {
 				read_timeout 1h
 				write_timeout 1h

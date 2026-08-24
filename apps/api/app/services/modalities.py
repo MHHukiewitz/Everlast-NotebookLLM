@@ -5,8 +5,11 @@ from app.models import Notebook
 from app.schemas import ModelCard, ModalitiesOut, ProviderStatus
 from app.services.connectors import router as model_router
 from app.services.net import host_open
+from app.services.piper_tts import piper_ready
 
 Kind = Literal["tts", "image"]
+ENGLISH_ONLY_TTS_MODELS = frozenset({"kokoro"})
+LOCAL_GERMAN_TTS = "piper"
 
 
 def _csv(value: str) -> list[str]:
@@ -32,7 +35,7 @@ def _lane_models(ids: list[str], provider: str) -> list[ModelCard]:
 
 
 def list_modalities() -> ModalitiesOut:
-    tts_local_up = host_open(settings.tts_local_base_url)
+    tts_local_up = piper_ready() or host_open(settings.tts_local_base_url)
     image_local_up = host_open(settings.image_local_base_url)
     eu_up = bool(settings.eu_llm_base_url and settings.eu_llm_api_key)
     or_up = bool(settings.openrouter_api_key)
@@ -53,11 +56,11 @@ def list_modalities() -> ModalitiesOut:
             label="Lokal",
             available=tts_local_up,
             notice=(
-                "Daten bleiben auf diesem Rechner. Starte ein OpenAI-kompatibles Sprachmodell."
+                "Deutsche Studio-Ausgabe nutzt lokale Piper-Stimmen. Kokoro spricht nur Englisch."
                 if tts_local_up
-                else "Lokales Sprachmodell ist nicht erreichbar."
+                else "Lokale Piper-Stimmen fehlen. Lege de_DE-thorsten-medium in data/tts-voices ab."
             ),
-            models=_lane_models(_csv(settings.tts_local_models), "local"),
+            models=_lane_models(_local_tts_models(), "local"),
         ),
         ProviderStatus(
             id="eu",
@@ -104,9 +107,16 @@ def list_modalities() -> ModalitiesOut:
     return ModalitiesOut(llm=model_router.list_providers(), tts=tts, image=image)
 
 
+def _local_tts_models() -> list[str]:
+    models = _csv(settings.tts_local_models)
+    if LOCAL_GERMAN_TTS not in models:
+        return [LOCAL_GERMAN_TTS, *models]
+    return models
+
+
 def _allowlist(kind: Kind, provider: str) -> list[str]:
     if kind == "tts" and provider == "local":
-        return _csv(settings.tts_local_models)
+        return _local_tts_models()
     if kind == "tts" and provider == "eu":
         return _csv(settings.tts_eu_models)
     if kind == "tts" and provider == "openrouter":
@@ -135,11 +145,12 @@ def resolve_media(kind: Kind, provider: str, model_id: str) -> dict[str, Any]:
         )
         if not host_open(base):
             raise ValueError(missing)
-        return {"model": chosen, "api_base": openai_v1(base), "headers": {}}
+        return {"provider": provider, "model": chosen, "api_base": openai_v1(base), "headers": {}}
     if provider == "eu":
         if not settings.eu_llm_base_url or not settings.eu_llm_api_key:
             raise ValueError("EU-Gateway ist nicht konfiguriert.")
         return {
+            "provider": provider,
             "model": chosen,
             "api_base": openai_v1(settings.eu_llm_base_url),
             "headers": {"Authorization": f"Bearer {settings.eu_llm_api_key}"},
@@ -148,6 +159,7 @@ def resolve_media(kind: Kind, provider: str, model_id: str) -> dict[str, Any]:
         if not settings.openrouter_api_key:
             raise ValueError("OpenRouter ist nicht konfiguriert.")
         return {
+            "provider": provider,
             "model": chosen,
             "api_base": "https://openrouter.ai/api/v1",
             "headers": {
@@ -159,8 +171,36 @@ def resolve_media(kind: Kind, provider: str, model_id: str) -> dict[str, Any]:
     raise ValueError(f"Unbekannter Provider: {provider}")
 
 
-def require_tts(notebook: Notebook) -> dict[str, Any]:
-    return resolve_media("tts", notebook.tts_provider, notebook.tts_model)
+def tts_language_code(language: str | None) -> str:
+    code = (language or "de").strip().lower().replace("_", "-")
+    if code.startswith("en"):
+        return "en"
+    return "de"
+
+
+def uses_english_only_local_tts(provider: str, model_id: str) -> bool:
+    chosen = (model_id or "").strip() or "kokoro"
+    return provider == "local" and chosen.split("/")[-1] in ENGLISH_ONLY_TTS_MODELS
+
+
+def piper_route() -> dict[str, Any]:
+    if not piper_ready():
+        raise ValueError(
+            f"Piper-Stimmen fehlen. Lege de_DE-thorsten-medium in {settings.tts_piper_voice_dir} ab."
+        )
+    return {"provider": "local", "model": LOCAL_GERMAN_TTS, "api_base": "piper", "headers": {}}
+
+
+def require_tts(notebook: Notebook, language: str | None = "de") -> dict[str, Any]:
+    provider = notebook.tts_provider
+    model_id = notebook.tts_model
+    local_model = ((model_id or "").strip() or LOCAL_GERMAN_TTS).split("/")[-1]
+    if provider == "local" and tts_language_code(language) == "de":
+        if local_model in ENGLISH_ONLY_TTS_MODELS or local_model == LOCAL_GERMAN_TTS:
+            return piper_route()
+    if provider == "local" and local_model == LOCAL_GERMAN_TTS:
+        return piper_route()
+    return resolve_media("tts", provider, model_id)
 
 
 def image_ready(notebook: Notebook) -> bool:

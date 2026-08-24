@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { CiteText, StudioCiteLinks, type StudioCiteProps } from "@/components/CiteText";
 import { api } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import type { VideoScene } from "@/lib/types";
@@ -10,12 +11,14 @@ export function VideoView({
   artifactId,
   scenes,
   status,
+  citations,
+  onCite,
 }: {
   notebookId: string;
   artifactId: string;
   scenes: VideoScene[];
   status?: string;
-}) {
+} & StudioCiteProps) {
   const [src, setSrc] = useState("");
   useEffect(() => {
     if (status !== "ready") return;
@@ -42,17 +45,31 @@ export function VideoView({
         {scenes.map((scene, index) => (
           <li key={`${scene.heading}-${index}`}>
             <p className="font-medium">
-              {index + 1}. {scene.heading}
+              {index + 1}. <CiteText text={scene.heading} citations={citations} onCite={onCite} />
             </p>
             <ul className="mt-1 list-disc pl-4">
               {(scene.bullets || []).map((bullet) => (
-                <li key={bullet}>{bullet}</li>
+                <li key={bullet}>
+                  <CiteText text={bullet} citations={citations} onCite={onCite} />
+                </li>
               ))}
             </ul>
-            {scene.narration && <p className="mt-1 text-neutral-500">{scene.narration}</p>}
+            {scene.narration && (
+              <p className="mt-1 text-neutral-500">
+                <CiteText text={scene.narration} citations={citations} onCite={onCite} />
+              </p>
+            )}
           </li>
         ))}
       </ol>
+      <StudioCiteLinks
+        text={scenes
+          .map((scene) => `${scene.heading}\n${(scene.bullets || []).join("\n")}\n${scene.narration || ""}`)
+          .join("\n")}
+        citations={citations}
+        onCite={onCite}
+        fallback="sources"
+      />
       <p className="mt-2 text-[11px] text-neutral-400">{t.aiBanner}</p>
     </div>
   );

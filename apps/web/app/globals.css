@@ -18,6 +18,18 @@ body {
   @apply flex h-full min-h-0 flex-col border-r border-line bg-white;
 }
 
+.studio-skills {
+  @apply mb-3 grid grid-cols-2 gap-1;
+}
+
+.studio-skill {
+  @apply flex min-h-0 items-center gap-1.5 rounded-lg border border-line px-2 py-1 text-left text-[11px] leading-tight;
+}
+
+.studio-skill.is-active {
+  box-shadow: inset 0 -2px 0 currentColor;
+}
+
 .btn {
   @apply rounded-full border border-line px-3 py-1.5 text-sm hover:bg-mist;
 }
