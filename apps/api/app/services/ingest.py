@@ -3,19 +3,23 @@ import re
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import httpx
 import trafilatura
+from bs4 import BeautifulSoup
 from docx import Document
 from pypdf import PdfReader
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.db import SessionLocal
 from app.models import Chunk, Citation, Notebook, Source
 from app.services.connectors import router
 from app.services.embeddings import embed_texts
 from app.services.net import host_open
+from app.services.tracing import pack_prompt, record_generation, start_trace
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _CITED_QUOTE = re.compile(r"\[(\d+)\]\s*[\"«„“](.+?)[\"»“”]", re.DOTALL)
@@ -102,15 +106,48 @@ def parse_upload(filename: str, data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def fetch_url_text(url: str) -> tuple[str, str]:
-    downloaded = trafilatura.fetch_url(url)
-    if not downloaded:
+def favicon_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}/favicon.ico"
+
+
+def _usable_icon(href: str, page_url: str) -> str:
+    raw = href.strip()
+    if not raw or raw in {"#", "data:,"}:
+        return ""
+    if raw.startswith("data:") and len(raw) < 64:
+        return ""
+    if raw.startswith("javascript:"):
+        return ""
+    return urljoin(page_url, raw)
+
+
+def favicon_from_html(html: str, page_url: str) -> str:
+    soup = BeautifulSoup(html, "lxml")
+    for tag in soup.find_all("link", href=True):
+        rel = tag.get("rel")
+        labels = " ".join(rel).lower() if isinstance(rel, list) else str(rel or "").lower()
+        if "icon" not in labels:
+            continue
+        icon = _usable_icon(str(tag["href"]), page_url)
+        if icon:
+            return icon
+    return favicon_from_url(page_url)
+
+
+def fetch_url_page(url: str) -> tuple[str, str, str]:
+    response = http_get(url, timeout=12.0)
+    if response.status_code >= 400:
         raise ValueError(f"Seite nicht erreichbar: {url}")
-    text = trafilatura.extract(downloaded, include_comments=False, include_tables=True) or ""
-    if not text.strip():
-        raise ValueError(f"Kein Text auf der Seite: {url}")
-    metadata = trafilatura.extract_metadata(downloaded)
-    title = metadata.title if metadata and metadata.title else url
+    page_url = str(response.url)
+    title, text = extract_html(response.text, fallback_title=url)
+    return title, text, favicon_from_html(response.text, page_url)
+
+
+def fetch_url_text(url: str) -> tuple[str, str]:
+    title, text, _icon = fetch_url_page(url)
     return title, text
 
 
@@ -205,9 +242,33 @@ async def write_model_summary(session: AsyncSession, source: Source, text: str) 
     completion = await router.complete(notebook.provider, notebook.model_id, messages)
     latency_ms = int((time.perf_counter() - started) * 1000)
     body = completion.choices[0].message.content or ""
+    visible = ground_summary(body.strip(), text) if body.strip() else fallback
+    await record_generation(
+        session,
+        tenant_id=source.tenant_id,
+        notebook_id=source.notebook_id,
+        kind="ingest",
+        model=f"{notebook.provider}/{notebook.model_id}",
+        prompt=pack_prompt(messages),
+        raw_output=body,
+        visible_output=visible,
+        extra={"source_id": str(source.id), "title": source.title},
+        latency_ms=latency_ms,
+        trace_id=start_trace("ingest", source.tenant_id, {"source_id": str(source.id)}),
+    )
     if not body.strip():
         return fallback, latency_ms
-    return ground_summary(body.strip(), text), latency_ms
+    return visible, latency_ms
+
+
+async def refresh_model_summary(source_id: uuid.UUID) -> None:
+    async with SessionLocal() as session:
+        source = await session.get(Source, source_id)
+        if source is None or not source.content_md:
+            return
+        summary, _latency = await write_model_summary(session, source, source.content_md)
+        source.summary_md = summary
+        await session.commit()
 
 
 async def finalize_source(
@@ -215,10 +276,14 @@ async def finalize_source(
     source: Source,
     text: str,
     citations: list[Citation] | None = None,
+    use_model_summary: bool = True,
 ) -> Source:
     source.content_md = text
-    summary, _latency = await write_model_summary(session, source, text)
-    source.summary_md = summary
+    if use_model_summary:
+        summary, _latency = await write_model_summary(session, source, text)
+        source.summary_md = summary
+    else:
+        source.summary_md = build_source_report(source.title, text, source.origin_uri)
     source.status = "ready"
     await write_chunks(session, source, text)
     if citations:
@@ -240,16 +305,27 @@ async def finalize_source(
     return source
 
 
-async def ingest_url(session: AsyncSession, source: Source, url: str) -> Source:
-    title, text = fetch_url_text(url)
+async def ingest_url(
+    session: AsyncSession,
+    source: Source,
+    url: str,
+    use_model_summary: bool = True,
+) -> Source:
+    title, text, icon = fetch_url_page(url)
     if not source.title or source.title == url:
         source.title = title
     source.origin_uri = url
-    return await finalize_source(session, source, text)
+    source.favicon_url = icon
+    return await finalize_source(session, source, text, use_model_summary=use_model_summary)
 
 
-async def ingest_text(session: AsyncSession, source: Source, text: str) -> Source:
-    return await finalize_source(session, source, text)
+async def ingest_text(
+    session: AsyncSession,
+    source: Source,
+    text: str,
+    use_model_summary: bool = True,
+) -> Source:
+    return await finalize_source(session, source, text, use_model_summary=use_model_summary)
 
 
 async def get_source(session: AsyncSession, source_id: uuid.UUID, tenant_id: str) -> Source | None:

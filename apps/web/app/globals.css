@@ -23,7 +23,7 @@ body {
 }
 
 .btn-primary {
-  @apply rounded-full bg-accent px-3 py-1.5 text-sm text-white hover:bg-blue-700;
+  @apply rounded-full bg-accent px-3 py-1.5 text-sm text-white hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60;
 }
 
 .chip {

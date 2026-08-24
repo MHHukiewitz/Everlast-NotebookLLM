@@ -6,7 +6,26 @@ import { SiteFooter } from "@/components/SiteFooter";
 import { ArtifactCard } from "@/components/studio/ArtifactCard";
 import { ApiError, api, streamChat, uploadFile } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { displayUrl, isHttpUrl, sourceFavicon } from "@/lib/source";
 import type { Artifact, AuthUser, Message, Notebook, Provider, ResearchJob, Skill, Source, SourceDetail } from "@/lib/types";
+
+function SourceIcon({ origin, favicon }: { origin: string | null | undefined; favicon?: string | null }) {
+  const [broken, setBroken] = useState(false);
+  const src = broken ? "" : sourceFavicon(origin, favicon);
+  if (!src) {
+    return <span className="mt-0.5 h-4 w-4 shrink-0 rounded bg-mist" aria-hidden />;
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      width={16}
+      height={16}
+      className="mt-0.5 h-4 w-4 shrink-0 rounded-sm"
+      onError={() => setBroken(true)}
+    />
+  );
+}
 
 export default function Page() {
   const [notebook, setNotebook] = useState<Notebook | null>(null);
@@ -35,6 +54,10 @@ export default function Page() {
   const [euOk, setEuOk] = useState(false);
   const [orOk, setOrOk] = useState(false);
   const [error, setError] = useState("");
+  const [addError, setAddError] = useState("");
+  const [addBusy, setAddBusy] = useState(false);
+  const [researchError, setResearchError] = useState("");
+  const [researchBusy, setResearchBusy] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
 
   const selectedCount = useMemo(() => sources.filter((s) => s.selected && s.status === "ready").length, [sources]);
@@ -78,24 +101,38 @@ export default function Page() {
   }, [refresh]);
 
   async function onAddUrl() {
-    if (!notebook || !urlValue) return;
-    setBusy(true);
-    setError("");
-    await api.addUrl(notebook.id, urlValue).catch((err: Error) => setError(err.message));
+    if (!notebook) return;
+    const url = urlValue.trim();
+    if (!url) {
+      setAddError(t.urlRequired);
+      return;
+    }
+    setAddBusy(true);
+    setAddError("");
+    const source = await api.addUrl(notebook.id, url).catch((err: Error) => {
+      setAddError(err.message === "Failed to fetch" ? t.apiOffline : err.message);
+      return null;
+    });
+    setAddBusy(false);
+    if (!source) return;
     setUrlValue("");
     setAddOpen(false);
     await refresh(notebook.id);
-    setBusy(false);
   }
 
   async function onAddText() {
     if (!notebook) return;
-    setBusy(true);
-    await api.addText(notebook.id, textTitle, textBody);
+    setAddBusy(true);
+    setAddError("");
+    const source = await api.addText(notebook.id, textTitle, textBody).catch((err: Error) => {
+      setAddError(err.message === "Failed to fetch" ? t.apiOffline : err.message);
+      return null;
+    });
+    setAddBusy(false);
+    if (!source) return;
     setTextBody("");
     setAddOpen(false);
     await refresh(notebook.id);
-    setBusy(false);
   }
 
   async function onFiles(files: FileList | null) {
@@ -108,14 +145,86 @@ export default function Page() {
     setBusy(false);
   }
 
+  const researchId = research?.id;
+  const researchStatus = research?.status;
+
+  useEffect(() => {
+    if (!notebook || !researchId) return;
+    if (researchStatus !== "queued" && researchStatus !== "running") return;
+    let ticks = 0;
+    const timer = window.setInterval(() => {
+      ticks += 1;
+      if (ticks > 45) {
+        setResearchError(t.searchTimeout);
+        setResearchBusy(false);
+        window.clearInterval(timer);
+        return;
+      }
+      api
+        .researchJob(notebook.id, researchId)
+        .then((next) => {
+          setResearch(next);
+          if (next.status === "ready") {
+            setSelectedCites(next.candidates.map((c) => c.id));
+            setResearchBusy(false);
+            return;
+          }
+          if (next.status === "error") {
+            setResearchError(next.progress || t.searchTimeout);
+            setResearchBusy(false);
+          }
+        })
+        .catch((err: Error) => {
+          setResearchError(err.message === "Failed to fetch" ? t.apiOffline : err.message);
+          setResearchBusy(false);
+        });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [notebook, researchId, researchStatus]);
+
   async function onResearch() {
-    if (!notebook || !query) return;
-    setBusy(true);
-    setError("");
-    const job = await api.research(notebook.id, query, mode);
+    if (!notebook || researchBusy) return;
+    const q = query.trim();
+    if (!q) {
+      setResearchError(t.searchEmpty);
+      return;
+    }
+    setResearchError("");
+    setResearchBusy(true);
+    setActiveSource(null);
+    const job = await api.research(notebook.id, q, mode).catch((err: Error) => {
+      setResearchError(err.message === "Failed to fetch" ? t.apiOffline : err.message);
+      return null;
+    });
+    if (!job) {
+      setResearchBusy(false);
+      return;
+    }
     setResearch(job);
-    setSelectedCites(job.candidates.map((c) => c.id));
-    setBusy(false);
+    if (job.status === "ready") {
+      setSelectedCites(job.candidates.map((c) => c.id));
+      setResearchBusy(false);
+    }
+    if (job.status === "error") {
+      setResearchError(job.progress || t.searchTimeout);
+      setResearchBusy(false);
+    }
+  }
+
+  function onCancelResearch() {
+    setResearch(null);
+    setSelectedCites([]);
+    setResearchBusy(false);
+    setResearchError("");
+  }
+
+  async function onDeleteSource(sourceId: string) {
+    if (!notebook) return;
+    await api.deleteSource(notebook.id, sourceId);
+    if (activeSource?.id === sourceId) {
+      setActiveSource(null);
+    }
+    await refresh(notebook.id);
   }
 
   async function onImport() {
@@ -247,17 +356,33 @@ export default function Page() {
                 className="w-full rounded-full border border-line px-3 py-2 text-sm"
                 placeholder={t.searchWeb}
                 value={query}
+                disabled={researchBusy}
                 onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && onResearch()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onResearch();
+                  }
+                }}
               />
+              <button className="btn" disabled={researchBusy} onClick={onResearch}>
+                {researchBusy ? t.searching : t.searchStart}
+              </button>
             </div>
             <div className="mt-2 flex gap-2 text-xs">
               <span className="chip">{t.web}</span>
-              <select className="chip bg-white" value={mode} onChange={(e) => setMode(e.target.value as "fast" | "deep")}>
+              <select
+                className="chip bg-white"
+                value={mode}
+                disabled={researchBusy}
+                onChange={(e) => setMode(e.target.value as "fast" | "deep")}
+              >
                 <option value="fast">{t.fast}</option>
                 <option value="deep">{t.deep}</option>
               </select>
             </div>
+            {researchError && <p className="mt-2 text-xs text-red-600">{researchError}</p>}
+            {researchBusy && <p className="mt-2 text-xs text-neutral-500">{research?.progress || t.searching}</p>}
           </div>
           <div
             className="mt-4 min-h-0 flex-1 overflow-auto px-4 pb-4"
@@ -267,33 +392,58 @@ export default function Page() {
               onFiles(e.dataTransfer.files);
             }}
           >
-            {research ? (
+            {research && (research.status === "queued" || research.status === "running") ? (
+              <div className="flex h-full flex-col items-center justify-center text-center text-sm text-neutral-500">
+                <p>{research.progress || t.searching}</p>
+                <p className="mt-1">{research.query}</p>
+                <button className="mt-4 text-xs text-accent" onClick={onCancelResearch}>
+                  {t.cancelResearch}
+                </button>
+              </div>
+            ) : research && research.status === "ready" ? (
               <div className="space-y-3 text-sm">
+                <button className="text-xs text-accent" onClick={onCancelResearch}>
+                  ← {t.cancelResearch}
+                </button>
                 <ReactMarkdown>{research.report_md}</ReactMarkdown>
                 <p className="font-medium">{t.cited}</p>
                 {research.candidates.filter((c) => c.cited_in_report).map((c) => (
-                  <label key={c.id} className="flex gap-2">
+                  <label key={c.id} className="flex items-start gap-2">
                     <input
                       type="checkbox"
+                      className="mt-1"
                       checked={selectedCites.includes(c.id)}
                       onChange={() =>
                         setSelectedCites((ids) => (ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id]))
                       }
                     />
-                    <span>{c.title}</span>
+                    <SourceIcon origin={c.url} />
+                    <span>
+                      <span className="block">{c.title}</span>
+                      {isHttpUrl(c.url) && (
+                        <span className="block break-all text-xs text-neutral-500">{displayUrl(c.url)}</span>
+                      )}
+                    </span>
                   </label>
                 ))}
                 <p className="font-medium">{t.notCited}</p>
                 {research.candidates.filter((c) => !c.cited_in_report).map((c) => (
-                  <label key={c.id} className="flex gap-2">
+                  <label key={c.id} className="flex items-start gap-2">
                     <input
                       type="checkbox"
+                      className="mt-1"
                       checked={selectedCites.includes(c.id)}
                       onChange={() =>
                         setSelectedCites((ids) => (ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id]))
                       }
                     />
-                    <span>{c.title}</span>
+                    <SourceIcon origin={c.url} />
+                    <span>
+                      <span className="block">{c.title}</span>
+                      {isHttpUrl(c.url) && (
+                        <span className="block break-all text-xs text-neutral-500">{displayUrl(c.url)}</span>
+                      )}
+                    </span>
                   </label>
                 ))}
                 <button className="btn-primary" onClick={onImport}>
@@ -305,11 +455,31 @@ export default function Page() {
                 <button className="text-xs text-accent" onClick={() => setActiveSource(null)}>
                   ← {t.sources}
                 </button>
-                <h3 className="font-medium">{activeSource.title}</h3>
+                <div className="flex items-start gap-2">
+                  <SourceIcon origin={activeSource.origin_uri} favicon={activeSource.favicon_url} />
+                  <div>
+                    <h3 className="font-medium">{activeSource.title}</h3>
+                    {isHttpUrl(activeSource.origin_uri) && (
+                      <a
+                        className="break-all text-xs text-accent"
+                        href={activeSource.origin_uri}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {displayUrl(activeSource.origin_uri)}
+                      </a>
+                    )}
+                  </div>
+                </div>
                 <ReactMarkdown>{activeSource.summary_md || activeSource.content_md}</ReactMarkdown>
-                <a className="btn-primary inline-block" href={api.pdfUrl(notebook.id, activeSource.id)}>
-                  {t.downloadPdf}
-                </a>
+                <div className="flex flex-wrap gap-2">
+                  <a className="btn-primary inline-block" href={api.pdfUrl(notebook.id, activeSource.id)}>
+                    {t.downloadPdf}
+                  </a>
+                  <button className="btn" onClick={() => onDeleteSource(activeSource.id)}>
+                    {t.removeSource}
+                  </button>
+                </div>
                 <ul className="space-y-1 text-xs">
                   {activeSource.citations.map((c) => (
                     <li key={c.id}>
@@ -335,12 +505,25 @@ export default function Page() {
                   <li key={source.id} className="flex items-start gap-2 rounded-lg border border-line p-2 text-sm">
                     <input
                       type="checkbox"
+                      className="mt-1"
                       checked={source.selected}
                       onChange={() => api.selectSource(notebook.id, source.id, !source.selected).then(() => refresh(notebook.id))}
                     />
-                    <button className="text-left" onClick={() => api.source(notebook.id, source.id).then(setActiveSource)}>
+                    <SourceIcon origin={source.origin_uri} favicon={source.favicon_url} />
+                    <button className="min-w-0 flex-1 text-left" onClick={() => api.source(notebook.id, source.id).then(setActiveSource)}>
                       <div className="font-medium">{source.title}</div>
-                      <div className="text-xs text-neutral-500">{source.type} · {source.status}</div>
+                      {isHttpUrl(source.origin_uri) ? (
+                        <div className="break-all text-xs text-neutral-500">{displayUrl(source.origin_uri)}</div>
+                      ) : (
+                        <div className="text-xs text-neutral-500">{source.type} · {source.status}</div>
+                      )}
+                    </button>
+                    <button
+                      className="mt-0.5 shrink-0 px-1 text-neutral-400 hover:text-red-600"
+                      title={t.removeSource}
+                      onClick={() => onDeleteSource(source.id)}
+                    >
+                      ×
                     </button>
                   </li>
                 ))}
@@ -385,6 +568,16 @@ export default function Page() {
                 {messages.map((message) => (
                   <article key={message.id} className={message.role === "user" ? "text-right" : ""}>
                     <div className={`inline-block max-w-full rounded-2xl px-4 py-3 text-sm ${message.role === "user" ? "bg-mist" : "bg-white"}`}>
+                      {message.role === "assistant" && message.reasoning && message.reasoning.length > 0 && (
+                        <details className="mb-2 text-xs text-neutral-500">
+                          <summary>{t.thoughts}</summary>
+                          <ul className="mt-1 list-disc pl-4 text-left">
+                            {message.reasoning.map((item) => (
+                              <li key={item}>{item}</li>
+                            ))}
+                          </ul>
+                        </details>
+                      )}
                       <ReactMarkdown>{message.content}</ReactMarkdown>
                       {message.citations?.length > 0 && (
                         <div className="mt-2 flex flex-wrap gap-1">
@@ -494,23 +687,36 @@ export default function Page() {
       <SiteFooter extra={t.footer} />
 
       {addOpen && (
-        <Modal title={t.addSources} onClose={() => setAddOpen(false)}>
+        <Modal title={t.addSources} onClose={() => !addBusy && setAddOpen(false)}>
+          {addError && <p className="mb-3 text-sm text-red-600">{addError}</p>}
           <label className="text-sm">{t.addUrl}</label>
-          <input className="mt-1 w-full rounded border border-line px-2 py-1" value={urlValue} onChange={(e) => setUrlValue(e.target.value)} />
-          <button className="btn-primary mt-2" onClick={onAddUrl}>
-            {t.addUrl}
+          <input
+            className="mt-1 w-full rounded border border-line px-2 py-1"
+            value={urlValue}
+            placeholder={t.urlPlaceholder}
+            disabled={addBusy}
+            onChange={(e) => setUrlValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onAddUrl();
+              }
+            }}
+          />
+          <button className="btn-primary mt-2" disabled={addBusy} onClick={onAddUrl}>
+            {addBusy ? t.addingUrl : t.addUrl}
           </button>
           <hr className="my-4" />
           <label className="text-sm">{t.pasteText}</label>
-          <input className="mt-1 w-full rounded border border-line px-2 py-1" value={textTitle} onChange={(e) => setTextTitle(e.target.value)} />
-          <textarea className="mt-2 h-28 w-full rounded border border-line p-2" value={textBody} onChange={(e) => setTextBody(e.target.value)} />
-          <button className="btn-primary mt-2" onClick={onAddText}>
-            {t.pasteText}
+          <input className="mt-1 w-full rounded border border-line px-2 py-1" value={textTitle} disabled={addBusy} onChange={(e) => setTextTitle(e.target.value)} />
+          <textarea className="mt-2 h-28 w-full rounded border border-line p-2" value={textBody} disabled={addBusy} onChange={(e) => setTextBody(e.target.value)} />
+          <button className="btn-primary mt-2" disabled={addBusy} onClick={onAddText}>
+            {addBusy ? t.addingText : t.pasteText}
           </button>
           <hr className="my-4" />
           <label className="btn cursor-pointer">
             {t.upload}
-            <input type="file" className="hidden" multiple onChange={(e) => onFiles(e.target.files).then(() => setAddOpen(false))} />
+            <input type="file" className="hidden" multiple disabled={addBusy} onChange={(e) => onFiles(e.target.files).then(() => setAddOpen(false))} />
           </label>
         </Modal>
       )}

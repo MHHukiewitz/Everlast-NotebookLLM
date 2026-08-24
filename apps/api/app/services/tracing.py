@@ -1,7 +1,12 @@
+import json
 import re
+import uuid
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import settings
+from app.models import GenerationLog
 
 _EMAIL = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 _LANGFUSE = None
@@ -19,9 +24,24 @@ def mask_text(value: str) -> str:
     return _EMAIL.sub("[email]", value)
 
 
-def start_trace(name: str, user_id: str, metadata: dict[str, Any] | None = None) -> str | None:
+def pack_prompt(messages: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for item in messages:
+        content = item.get("content")
+        if content is None:
+            content = json.dumps(
+                {"tool_calls": item.get("tool_calls"), "name": item.get("name")},
+                default=str,
+                ensure_ascii=False,
+            )
+        parts.append(f"{item.get('role')}: {content}")
+    return "\n\n".join(parts)
+
+
+def start_trace(name: str, user_id: str, metadata: dict[str, Any] | None = None) -> str:
+    local_id = str(uuid.uuid4())
     if _LANGFUSE is None:
-        return None
+        return local_id
     trace = _LANGFUSE.trace(name=name, user_id=user_id, metadata=metadata or {})
     return trace.id
 
@@ -50,9 +70,60 @@ def log_generation(
         return
     _LANGFUSE.generation(
         trace_id=trace_id,
-        name="chat",
+        name="llm",
         model=model,
         input=mask_text(prompt),
         output=mask_text(completion),
         metadata=metadata or {},
     )
+
+
+async def record_generation(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    notebook_id: uuid.UUID,
+    kind: str,
+    model: str,
+    prompt: str,
+    raw_output: str,
+    visible_output: str = "",
+    reasoning: list[Any] | None = None,
+    tool_calls: list[Any] | None = None,
+    extra: dict[str, Any] | None = None,
+    message_id: uuid.UUID | None = None,
+    latency_ms: int = 0,
+    trace_id: str | None = None,
+) -> GenerationLog:
+    steps = list(reasoning or [])
+    calls = list(tool_calls or [])
+    meta = dict(extra or {})
+    row = GenerationLog(
+        tenant_id=tenant_id,
+        notebook_id=notebook_id,
+        message_id=message_id,
+        kind=kind,
+        model=model,
+        prompt=prompt,
+        raw_output=raw_output,
+        visible_output=visible_output,
+        reasoning=steps,
+        tool_calls=calls,
+        extra=meta,
+        latency_ms=latency_ms,
+    )
+    session.add(row)
+    log_generation(
+        trace_id,
+        model,
+        prompt,
+        raw_output or visible_output,
+        {
+            **meta,
+            "kind": kind,
+            "visible_output": mask_text(visible_output),
+            "reasoning": steps,
+            "tool_calls": calls,
+        },
+    )
+    return row

@@ -10,9 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.db import SessionLocal
 from app.models import Citation, Notebook, ResearchJob, Source
 from app.services.connectors import router
-from app.services.ingest import finalize_source
+from app.services.ingest import favicon_from_html, favicon_from_url, finalize_source
+from app.services.tracing import pack_prompt, record_generation, start_trace
 
 _SKIP = {".pdf", ".jpg", ".png", ".gif", ".zip", ".css", ".js"}
 
@@ -28,8 +30,12 @@ def _host_open(url: str) -> bool:
     return code == 0
 
 
+def searx_reachable() -> bool:
+    return _host_open(settings.searxng_url)
+
+
 def searx_search(query: str, count: int = 8) -> list[dict[str, str]]:
-    if not _host_open(settings.searxng_url):
+    if not searx_reachable():
         raise ValueError("SearXNG ist nicht erreichbar. Starte den SearXNG-Container.")
     response = httpx.get(
         f"{settings.searxng_url.rstrip('/')}/search",
@@ -118,6 +124,11 @@ async def _add_candidates(
 
 
 async def run_fast_research(session: AsyncSession, job: ResearchJob) -> None:
+    if not searx_reachable():
+        job.status = "error"
+        job.progress = "SearXNG ist nicht erreichbar. Starte den SearXNG-Container."
+        await session.commit()
+        return
     job.status = "running"
     job.progress = "Suche läuft"
     await session.commit()
@@ -132,6 +143,11 @@ async def run_fast_research(session: AsyncSession, job: ResearchJob) -> None:
 
 
 async def run_deep_research(session: AsyncSession, job: ResearchJob) -> None:
+    if not searx_reachable():
+        job.status = "error"
+        job.progress = "SearXNG ist nicht erreichbar. Starte den SearXNG-Container."
+        await session.commit()
+        return
     job.status = "running"
     job.progress = "Suche und Browse"
     await session.commit()
@@ -154,9 +170,11 @@ async def run_deep_research(session: AsyncSession, job: ResearchJob) -> None:
         },
     ]
     report = ""
+    raw_report = ""
     if notebook and pages:
         completion = await router.complete(notebook.provider, notebook.model_id, messages)
-        report = completion.choices[0].message.content or ""
+        raw_report = completion.choices[0].message.content or ""
+        report = raw_report
     if not report:
         report = "# Deep Research\n\n" + "\n\n".join(
             f"## {page['title']}\n\n{page['text'][:600]}" for page in pages
@@ -164,6 +182,19 @@ async def run_deep_research(session: AsyncSession, job: ResearchJob) -> None:
     cited_urls = {page["url"] for page in pages if page["url"] in report or page["title"] in report}
     if not cited_urls and pages:
         cited_urls = {pages[0]["url"]}
+    if notebook:
+        await record_generation(
+            session,
+            tenant_id=job.tenant_id,
+            notebook_id=job.notebook_id,
+            kind="research",
+            model=f"{notebook.provider}/{notebook.model_id}",
+            prompt=pack_prompt(messages),
+            raw_output=raw_report,
+            visible_output=report,
+            extra={"job_id": str(job.id), "query": job.query, "mode": job.mode},
+            trace_id=start_trace("research", job.tenant_id, {"job_id": str(job.id)}),
+        )
     job.report_md = report
     await _add_candidates(
         session,
@@ -187,6 +218,11 @@ async def run_research_job(session: AsyncSession, job_id: uuid.UUID) -> None:
     await run_fast_research(session, job)
 
 
+async def run_research_job_isolated(job_id: uuid.UUID) -> None:
+    async with SessionLocal() as session:
+        await run_research_job(session, job_id)
+
+
 async def import_research(
     session: AsyncSession,
     job: ResearchJob,
@@ -195,25 +231,29 @@ async def import_research(
 ) -> list[Source]:
     created: list[Source] = []
     if import_report and job.report_md:
+        report_cites = list(
+            (
+                await session.execute(
+                    select(Citation).where(
+                        Citation.research_job_id == job.id,
+                        Citation.cited_in_report.is_(True),
+                    )
+                )
+            ).scalars()
+        )
+        first_url = next((cite.url for cite in report_cites if cite.url), "")
         source = Source(
             tenant_id=job.tenant_id,
             notebook_id=job.notebook_id,
             type="research_report",
             title=f"Bericht: {job.query}",
             status="pending",
-            origin_uri=None,
+            origin_uri=first_url or None,
+            favicon_url=favicon_from_url(first_url) or None,
             research_mode=job.mode,
         )
         session.add(source)
         await session.flush()
-        cites = (
-            await session.execute(
-                select(Citation).where(
-                    Citation.research_job_id == job.id,
-                    Citation.cited_in_report.is_(True),
-                )
-            )
-        ).scalars()
         copies = [
             Citation(
                 tenant_id=job.tenant_id,
@@ -223,7 +263,7 @@ async def import_research(
                 quote=cite.quote,
                 cited_in_report=True,
             )
-            for cite in cites
+            for cite in report_cites
         ]
         await finalize_source(session, source, job.report_md, copies)
         created.append(source)
@@ -240,11 +280,14 @@ async def import_research(
             title=cite.title,
             status="pending",
             origin_uri=cite.url,
+            favicon_url=favicon_from_url(cite.url) or None,
             research_mode=job.mode,
         )
         session.add(source)
         await session.flush()
         extracted = trafilatura.fetch_url(cite.url)
+        if extracted:
+            source.favicon_url = favicon_from_html(extracted, cite.url) or source.favicon_url
         text = (trafilatura.extract(extracted) if extracted else None) or cite.quote or cite.url
         await finalize_source(
             session,
