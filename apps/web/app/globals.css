@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#__next {
+  height: 100%;
+}
+
+body {
+  color: #1f1f1f;
+  background: #fff;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.panel {
+  @apply flex h-full min-h-0 flex-col border-r border-line bg-white;
+}
+
+.btn {
+  @apply rounded-full border border-line px-3 py-1.5 text-sm hover:bg-mist;
+}
+
+.btn-primary {
+  @apply rounded-full bg-accent px-3 py-1.5 text-sm text-white hover:bg-blue-700;
+}
+
+.chip {
+  @apply rounded-full border border-line px-3 py-1 text-sm hover:bg-mist;
+}
