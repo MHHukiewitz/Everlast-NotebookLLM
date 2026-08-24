@@ -1,0 +1,28 @@
+---
+description: Do not stash incomplete work. Stop and return to the user.
+alwaysApply: true
+---
+
+# Incomplete work
+
+If you find incomplete work, stop and tell the user.
+
+Do **not** run `git stash`, `git stash push`, or any command that hides, parks, or sets aside uncommitted changes.
+
+Incomplete work includes:
+
+- Uncommitted edits from a prior turn or session
+- A task that was interrupted before it finished
+- A dirty tree that you did not create in this turn
+- Partial fixes that you cannot complete now
+
+Tell the user what is incomplete. Wait for the next instruction.
+
+```text
+# BAD
+git stash
+git stash push -u -m "wip"
+
+# GOOD
+Stop. List the incomplete files. Ask what to do next.
+```
