@@ -66,7 +66,13 @@ async def _list_sources(session: AsyncSession, notebook: Notebook, args: dict[st
     ).scalars()
     return {
         "sources": [
-            {"id": str(row.id), "title": row.title, "selected": row.selected, "status": row.status}
+            {
+                "id": str(row.id),
+                "title": row.title,
+                "selected": row.selected,
+                "status": row.status,
+                "origin_uri": row.origin_uri,
+            }
             for row in rows
         ]
     }
@@ -79,6 +85,39 @@ async def _set_selected(session: AsyncSession, notebook: Notebook, args: dict[st
     source.selected = bool(args["selected"])
     await session.commit()
     return {"source_id": str(source.id), "selected": source.selected}
+
+
+def _source_matches(source: Source, query: str) -> bool:
+    needle = query.casefold().strip()
+    if not needle:
+        return False
+    hay = " ".join(part for part in (source.title, source.origin_uri, source.type) if part)
+    return needle in hay.casefold()
+
+
+async def _delete_source(session: AsyncSession, notebook: Notebook, args: dict[str, Any]) -> dict[str, Any]:
+    source = await session.get(Source, uuid.UUID(args["source_id"]))
+    if source is None or source.notebook_id != notebook.id:
+        raise ValueError("Quelle nicht gefunden")
+    title = source.title
+    await session.delete(source)
+    await session.commit()
+    return {"deleted": [{"id": args["source_id"], "title": title}], "count": 1}
+
+
+async def _delete_matching(session: AsyncSession, notebook: Notebook, args: dict[str, Any]) -> dict[str, Any]:
+    query = str(args.get("query") or "").strip()
+    if not query:
+        raise ValueError("Gib einen Suchbegriff für das Löschen an.")
+    rows = list((await session.execute(select(Source).where(Source.notebook_id == notebook.id))).scalars())
+    deleted: list[dict[str, str]] = []
+    for source in rows:
+        if not _source_matches(source, query):
+            continue
+        deleted.append({"id": str(source.id), "title": source.title})
+        await session.delete(source)
+    await session.commit()
+    return {"deleted": deleted, "count": len(deleted), "query": query}
 
 
 async def _notes_create(session: AsyncSession, notebook: Notebook, args: dict[str, Any]) -> dict[str, Any]:
@@ -156,6 +195,18 @@ REGISTRY: dict[str, Skill] = {
         {"type": "object", "properties": {"source_id": {"type": "string"}, "selected": {"type": "boolean"}}, "required": ["source_id", "selected"]},
         _set_selected,
     ),
+    "sources.delete": Skill(
+        SkillCard(id="sources.delete", title="Quelle löschen", description="Eine Quelle per ID entfernen", status="available", icon="delete"),
+        "Löscht eine Quelle anhand der source_id.",
+        {"type": "object", "properties": {"source_id": {"type": "string"}}, "required": ["source_id"]},
+        _delete_source,
+    ),
+    "sources.delete_matching": Skill(
+        SkillCard(id="sources.delete_matching", title="Quellen löschen", description="Quellen nach Titel oder URL entfernen", status="available", icon="delete"),
+        "Löscht alle Quellen, deren Titel oder URL den Suchbegriff enthalten.",
+        {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        _delete_matching,
+    ),
     "research.fast": Skill(
         SkillCard(id="research.fast", title="Schnelle Recherche", description="Websuche nach Quellen", status="available", icon="search"),
         "Startet Fast Research.",
@@ -220,6 +271,17 @@ STUDIO_CATALOG = [
 ]
 
 
+CHAT_TOOLS = [
+    "sources.add_url",
+    "sources.add_text",
+    "sources.list",
+    "sources.set_selected",
+    "sources.delete",
+    "sources.delete_matching",
+    "notes.create",
+]
+
+
 def router_cards() -> list[dict[str, str]]:
     return [{"id": skill.card.id, "description": skill.card.description} for skill in REGISTRY.values()]
 
@@ -262,3 +324,13 @@ async def run_skill(
 
 def name_to_id(tool_name: str) -> str:
     return tool_name.replace("_", ".", 1) if tool_name.count("_") else tool_name
+
+
+def resolve_tool_name(tool_name: str) -> str | None:
+    raw = tool_name.strip()
+    if raw in REGISTRY:
+        return raw
+    dotted = name_to_id(raw.replace(".", "_"))
+    if dotted in REGISTRY:
+        return dotted
+    return None

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { SiteFooter } from "@/components/SiteFooter";
-import { ApiError, api, type EvalItem, type EvalRun } from "@/lib/api";
+import { ApiError, api, type EvalItem, type EvalRun, type GenerationLog } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 export default function EvalPage() {
@@ -15,12 +15,14 @@ export default function EvalPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [reviewer, setReviewer] = useState("reviewer");
+  const [generations, setGenerations] = useState<GenerationLog[]>([]);
 
   const active = useMemo(() => runs.find((run) => run.id === activeId) || runs[0], [runs, activeId]);
 
   function reload() {
-    return api.evalRuns().then((list) => {
+    return Promise.all([api.evalRuns(), api.generations()]).then(([list, logs]) => {
       setRuns(list);
+      setGenerations(logs);
       if (!activeId && list[0]) setActiveId(list[0].id);
     });
   }
@@ -265,6 +267,46 @@ export default function EvalPage() {
           </div>
         </section>
       )}
+
+      <section className="mt-10">
+        <h2 className="text-lg font-medium">LLM-Protokoll</h2>
+        <p className="mb-3 text-sm text-neutral-500">
+          Interne Ablage: Rohausgabe, sichtbare Antwort und Reasoning. Nicht für Training.
+        </p>
+        {generations.length === 0 ? (
+          <p className="text-sm text-neutral-500">Noch keine Generierungen gespeichert.</p>
+        ) : (
+          <div className="space-y-3">
+            {generations.map((row) => (
+              <article key={row.id} className="rounded-xl border border-line p-3 text-xs">
+                <div className="flex flex-wrap justify-between gap-2 text-neutral-500">
+                  <span>
+                    {row.kind} · {row.model} · {row.latency_ms} ms
+                  </span>
+                  <span>{row.created_at}</span>
+                </div>
+                {row.reasoning.length > 0 && (
+                  <p className="mt-2">Ablauf: {row.reasoning.join(" · ")}</p>
+                )}
+                <details className="mt-2">
+                  <summary>Prompt</summary>
+                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap">{row.prompt}</pre>
+                </details>
+                <details className="mt-2">
+                  <summary>Rohausgabe</summary>
+                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap">{row.raw_output || "—"}</pre>
+                </details>
+                <details className="mt-2">
+                  <summary>Sichtbare Ausgabe</summary>
+                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap">{row.visible_output || "—"}</pre>
+                </details>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+      </div>
+      <SiteFooter extra={t.footer} />
     </div>
   );
 }

@@ -11,6 +11,7 @@ from app.config import settings
 from app.models import Artifact, Notebook, Source
 from app.services.connectors import router
 from app.services.retrieve import hybrid_search
+from app.services.tracing import pack_prompt, record_generation, start_trace
 
 DEFAULT_QUERY = "Kernaussagen der Quellen"
 
@@ -142,6 +143,18 @@ async def generate_json(
     ]
     completion = await router.complete(notebook.provider, notebook.model_id, messages)
     raw = completion.choices[0].message.content or ""
+    await record_generation(
+        session,
+        tenant_id=notebook.tenant_id,
+        notebook_id=notebook.id,
+        kind="studio",
+        model=f"{notebook.provider}/{notebook.model_id}",
+        prompt=pack_prompt(messages),
+        raw_output=raw,
+        visible_output=raw,
+        extra={"topic": topic},
+        trace_id=start_trace("studio", notebook.tenant_id, {"notebook_id": str(notebook.id)}),
+    )
     if not raw.strip():
         raise ValueError("Das Modell lieferte keine Ausgabe.")
     payload = parse_json_object(raw)
