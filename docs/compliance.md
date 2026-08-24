@@ -9,11 +9,27 @@ Everlast Notebook is a source-grounded research assistant. For typical Mittelsta
 ## Lawful basis (demo)
 
 - Demo and interview: legitimate interest in showing a product.
+- Account and notebook use: Art. 6(1)(b) GDPR (use of the service).
 - Customer deployment: contract or documented legitimate interest. Record this in the customer processing register.
+
+## Accounts
+
+- Email and password hash live in PostgreSQL. Emails are not verified in this demo.
+- Registration accepts only addresses in `REGISTER_ALLOWLIST`. An empty list means no public registration.
+- Startup can seed one interviewer account from `DEMO_EMAIL` and `DEMO_PASSWORD`. Send those values privately. Do not print the password in the UI.
+- `tenant_id` is the user id. Users see only their own notebooks.
+- Account delete: `DELETE /api/auth/me`. Blocked for the seeded demo email.
+
+## Session cookie
+
+- The API sets one httpOnly cookie named `session` (SameSite=Lax).
+- The cookie is strictly necessary for login (TTDSG § 25).
+- There are no analytics or advertising cookies. There is no cookie banner.
+- Describe the cookie in `/datenschutz`.
 
 ## Data map
 
-- Notebook sources, chunks, embeddings, chat, notes, research scratch, and audit events live in PostgreSQL.
+- Accounts, notebook sources, chunks, embeddings, chat, notes, research scratch, and audit events live in PostgreSQL.
 - Original files live on disk (`FILE_STORE`).
 - Embeddings are personal data. They stay on the machine. They are never sent to OpenRouter or an EU gateway.
 - Cloud LLM routes send only the question and retrieved chunks.
@@ -34,6 +50,7 @@ Everlast Notebook is a source-grounded research assistant. For typical Mittelsta
 
 - Export: `GET /api/notebooks/{id}/export`
 - Erase: `DELETE /api/notebooks/{id}` removes files, chunks, embeddings, messages, artifacts, jobs, and Langfuse traces when configured.
+- Account erase: `DELETE /api/auth/me` (not for the demo user).
 - Retention: notebook data until user delete. Research scratch target: 30 days (`RESEARCH_SCRATCH_DAYS`).
 
 ## Logging

@@ -13,9 +13,14 @@ Source-grounded research notebook for the Everlast GmbH assignment. The app clon
 
 ```bash
 cp .env.example .env
-# optional: set OPENROUTER_API_KEY in .env
+# set SESSION_SECRET, DEMO_EMAIL, DEMO_PASSWORD
+# optional: REGISTER_ALLOWLIST=anna@everlast.de
+# optional: OPENROUTER_API_KEY
+# optional: NEXT_PUBLIC_OPERATOR_NAME, NEXT_PUBLIC_OPERATOR_ADDRESS, NEXT_PUBLIC_OPERATOR_EMAIL
 docker compose -f infra/docker-compose.yml up --build
 ```
+
+Send `DEMO_EMAIL` and `DEMO_PASSWORD` to the interviewer. Do not put the password on the login page. Registration accepts only emails in `REGISTER_ALLOWLIST`.
 
 - UI: http://localhost:3000
 - API: http://localhost:8000/docs
@@ -68,4 +73,4 @@ Open http://localhost:3000/eval to review chat answers, HTML extract quality, th
 
 ## MVP
 
-Sources (file, text, URL), Fast/Deep research, grounded chat with citations, notes, skill registry, export/erase, AI Act labels. See [docs/compliance.md](docs/compliance.md).
+Sources (file, text, URL), Fast/Deep research, grounded chat with citations, notes, skill registry, login, export/erase, AI Act labels, Impressum and Datenschutz. See [docs/compliance.md](docs/compliance.md).

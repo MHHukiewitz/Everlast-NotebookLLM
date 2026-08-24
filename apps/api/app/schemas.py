@@ -48,6 +48,7 @@ class SourceOut(BaseModel):
     status: str
     selected: bool
     origin_uri: str | None
+    favicon_url: str | None = None
     content_md: str
     summary_md: str
     research_mode: str | None
@@ -92,6 +93,25 @@ class MessageOut(BaseModel):
     tool_calls: list[Any]
     model: str | None
     trace_id: str | None
+    reasoning: list[Any] = Field(default_factory=list)
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class GenerationLogOut(BaseModel):
+    id: uuid.UUID
+    notebook_id: uuid.UUID
+    message_id: uuid.UUID | None
+    kind: str
+    model: str
+    prompt: str
+    raw_output: str
+    visible_output: str
+    reasoning: list[Any]
+    tool_calls: list[Any]
+    extra: dict[str, Any]
+    latency_ms: int
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -151,6 +171,25 @@ class ResearchJobOut(BaseModel):
 class ResearchImportIn(BaseModel):
     citation_ids: list[uuid.UUID]
     import_report: bool = True
+
+
+class RegisterIn(BaseModel):
+    email: str
+    password: str
+    privacy_ack: bool
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class UserOut(BaseModel):
+    id: uuid.UUID
+    email: str
+    is_demo: bool
+
+    model_config = {"from_attributes": True}
 
 
 class EvalStartIn(BaseModel):

@@ -8,7 +8,6 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.models import Artifact, EvalItem, EvalRun, Notebook, Source
 from app.services.chat_agent import run_chat
 from app.services.ingest import extract_html, write_chunks, write_model_summary
@@ -105,18 +104,18 @@ async def upsert_eval_source(
 
 
 async def ensure_eval_notebook(
-    session: AsyncSession, provider: str, model_id: str
+    session: AsyncSession, provider: str, model_id: str, tenant_id: str
 ) -> tuple[Notebook, Source, Source, int]:
     result = await session.execute(
         select(Notebook).where(
-            Notebook.tenant_id == settings.default_tenant_id,
+            Notebook.tenant_id == tenant_id,
             Notebook.title == EVAL_TITLE,
         )
     )
     notebook = result.scalar_one_or_none()
     if notebook is None:
         notebook = Notebook(
-            tenant_id=settings.default_tenant_id,
+            tenant_id=tenant_id,
             title=EVAL_TITLE,
             provider=provider,
             model_id=model_id,
@@ -267,12 +266,12 @@ def score_source_output(
     }
 
 
-async def run_eval(session: AsyncSession, provider: str, model_id: str) -> EvalRun:
+async def run_eval(session: AsyncSession, provider: str, model_id: str, tenant_id: str) -> EvalRun:
     notebook, gold_source, extract_source, summary_latency_ms = await ensure_eval_notebook(
-        session, provider, model_id
+        session, provider, model_id, tenant_id
     )
     run = EvalRun(
-        tenant_id=settings.default_tenant_id,
+        tenant_id=tenant_id,
         notebook_id=notebook.id,
         provider=provider,
         model_id=model_id,
@@ -339,7 +338,7 @@ async def run_eval(session: AsyncSession, provider: str, model_id: str) -> EvalR
                 "refuse_ok": refuse_ok,
             }
         item = EvalItem(
-            tenant_id=settings.default_tenant_id,
+            tenant_id=tenant_id,
             run_id=run.id,
             case_id=case["id"],
             task=task,

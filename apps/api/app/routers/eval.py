@@ -1,14 +1,14 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.db import get_session
-from app.models import EvalItem, EvalRun
-from app.schemas import EvalItemOut, EvalRunOut, EvalStartIn, HumanScoreIn
+from app.deps import current_tenant, current_user
+from app.models import EvalItem, EvalRun, GenerationLog, User
+from app.schemas import EvalItemOut, EvalRunOut, EvalStartIn, GenerationLogOut, HumanScoreIn
 from app.services.eval_harness import run_eval
 
 api = APIRouter(prefix="/api/eval")
@@ -18,21 +18,38 @@ def _run_out(run: EvalRun, items: list[EvalItem]) -> EvalRunOut:
     return EvalRunOut.model_validate(run).model_copy(update={"items": items})
 
 
+@api.get("/generations", response_model=list[GenerationLogOut])
+async def list_generations(
+    session: AsyncSession = Depends(get_session),
+    tenant: str = Depends(current_tenant),
+    limit: int = Query(80, ge=1, le=300),
+) -> list[GenerationLog]:
+    rows = (
+        await session.execute(
+            select(GenerationLog)
+            .where(GenerationLog.tenant_id == tenant)
+            .order_by(GenerationLog.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars()
+    return list(rows)
+
+
 @api.get("/gold")
-async def gold() -> list[dict]:
+async def gold(_: User = Depends(current_user)) -> list[dict]:
     from app.services.eval_harness import load_gold
 
     return load_gold()
 
 
 @api.get("/runs", response_model=list[EvalRunOut])
-async def list_runs(session: AsyncSession = Depends(get_session)) -> list[EvalRunOut]:
+async def list_runs(
+    session: AsyncSession = Depends(get_session), tenant: str = Depends(current_tenant)
+) -> list[EvalRunOut]:
     runs = list(
         (
             await session.execute(
-                select(EvalRun)
-                .where(EvalRun.tenant_id == settings.default_tenant_id)
-                .order_by(EvalRun.created_at.desc())
+                select(EvalRun).where(EvalRun.tenant_id == tenant).order_by(EvalRun.created_at.desc())
             )
         ).scalars()
     )
@@ -44,27 +61,41 @@ async def list_runs(session: AsyncSession = Depends(get_session)) -> list[EvalRu
 
 
 @api.get("/runs/{run_id}", response_model=EvalRunOut)
-async def get_run(run_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> EvalRunOut:
+async def get_run(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    tenant: str = Depends(current_tenant),
+) -> EvalRunOut:
     run = await session.get(EvalRun, run_id)
-    if run is None:
+    if run is None or run.tenant_id != tenant:
         raise HTTPException(404, "Eval-Lauf nicht gefunden")
     items = list((await session.execute(select(EvalItem).where(EvalItem.run_id == run.id))).scalars())
     return _run_out(run, items)
 
 
 @api.post("/runs", response_model=EvalRunOut)
-async def start_run(body: EvalStartIn, session: AsyncSession = Depends(get_session)) -> EvalRunOut:
-    run = await run_eval(session, body.provider, body.model_id)
+async def start_run(
+    body: EvalStartIn,
+    session: AsyncSession = Depends(get_session),
+    tenant: str = Depends(current_tenant),
+) -> EvalRunOut:
+    run = await run_eval(session, body.provider, body.model_id, tenant)
     items = list((await session.execute(select(EvalItem).where(EvalItem.run_id == run.id))).scalars())
     return _run_out(run, items)
 
 
 @api.patch("/items/{item_id}", response_model=EvalItemOut)
 async def score_item(
-    item_id: uuid.UUID, body: HumanScoreIn, session: AsyncSession = Depends(get_session)
+    item_id: uuid.UUID,
+    body: HumanScoreIn,
+    session: AsyncSession = Depends(get_session),
+    tenant: str = Depends(current_tenant),
 ) -> EvalItem:
     item = await session.get(EvalItem, item_id)
     if item is None:
+        raise HTTPException(404, "Eval-Fall nicht gefunden")
+    run = await session.get(EvalRun, item.run_id)
+    if run is None or run.tenant_id != tenant:
         raise HTTPException(404, "Eval-Fall nicht gefunden")
     item.human_faithfulness = body.human_faithfulness
     item.human_usefulness = body.human_usefulness
@@ -74,31 +105,32 @@ async def score_item(
     item.reviewer = body.reviewer
     item.reviewed_at = datetime.now(timezone.utc)
     await session.commit()
-    run = await session.get(EvalRun, item.run_id)
-    if run:
-        items = list((await session.execute(select(EvalItem).where(EvalItem.run_id == run.id))).scalars())
-        reviewed = sum(1 for row in items if row.reviewed_at is not None)
-        metrics = dict(run.metrics or {})
-        metrics["human_reviewed"] = reviewed
-        scored = [row for row in items if row.human_faithfulness is not None]
-        if scored:
-            metrics["avg_human_faithfulness"] = round(
-                sum(row.human_faithfulness or 0 for row in scored) / len(scored), 2
-            )
-            metrics["human_pass_rate"] = round(
-                sum(1 for row in items if row.human_pass) / len(items), 3
-            )
-        run.metrics = metrics
-        await session.commit()
+    items = list((await session.execute(select(EvalItem).where(EvalItem.run_id == run.id))).scalars())
+    reviewed = sum(1 for row in items if row.reviewed_at is not None)
+    metrics = dict(run.metrics or {})
+    metrics["human_reviewed"] = reviewed
+    scored = [row for row in items if row.human_faithfulness is not None]
+    if scored:
+        metrics["avg_human_faithfulness"] = round(
+            sum(row.human_faithfulness or 0 for row in scored) / len(scored), 2
+        )
+        metrics["human_pass_rate"] = round(sum(1 for row in items if row.human_pass) / len(items), 3)
+    run.metrics = metrics
+    await session.commit()
     await session.refresh(item)
     return item
 
 
 @api.get("/compare")
-async def compare(a: uuid.UUID, b: uuid.UUID, session: AsyncSession = Depends(get_session)) -> dict:
+async def compare(
+    a: uuid.UUID,
+    b: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    tenant: str = Depends(current_tenant),
+) -> dict:
     left = await session.get(EvalRun, a)
     right = await session.get(EvalRun, b)
-    if left is None or right is None:
+    if left is None or right is None or left.tenant_id != tenant or right.tenant_id != tenant:
         raise HTTPException(404, "Eval-Lauf nicht gefunden")
     left_items = {
         row.case_id: row

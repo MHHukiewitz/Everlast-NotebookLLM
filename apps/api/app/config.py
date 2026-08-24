@@ -6,6 +6,11 @@ class Settings(BaseSettings):
 
     default_tenant_id: str = "default"
     default_user_id: str = "demo"
+    session_secret: str = "change-me-session-secret"
+    session_https: bool = False
+    demo_email: str = ""
+    demo_password: str = ""
+    register_allowlist: str = ""
     database_url: str = "postgresql+asyncpg://notebook:notebook@localhost:5432/notebook"
     redis_url: str = ""
 

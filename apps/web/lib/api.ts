@@ -1,6 +1,15 @@
-import type { Artifact, Message, Notebook, Provider, ResearchJob, Skill, Source, SourceDetail } from "./types";
+import type { Artifact, AuthUser, Message, Notebook, Provider, ResearchJob, Skill, Source, SourceDetail } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || "";
+
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 function apiDetail(body: string, fallback: string): string {
   const prefix = '{"detail":"';
@@ -11,13 +20,18 @@ function apiDetail(body: string, fallback: string): string {
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Content-Type") && init?.body && !(init.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    credentials: "include",
+    headers,
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(apiDetail(body, response.statusText));
+    throw new ApiError(apiDetail(body, response.statusText), response.status);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -26,6 +40,16 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  me: () => req<AuthUser>("/api/auth/me"),
+  login: (email: string, password: string) =>
+    req<AuthUser>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  register: (email: string, password: string, privacyAck: boolean) =>
+    req<AuthUser>("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ email, password, privacy_ack: privacyAck }),
+    }),
+  logout: () => req<{ status: string }>("/api/auth/logout", { method: "POST" }),
+  deleteAccount: () => req<{ status: string }>("/api/auth/me", { method: "DELETE" }),
   providers: () => req<Provider[]>("/api/providers"),
   notebooks: () => req<Notebook[]>("/api/notebooks"),
   createNotebook: () => req<Notebook>("/api/notebooks", { method: "POST" }),
@@ -63,6 +87,8 @@ export const api = {
     }),
   research: (id: string, query: string, mode: "fast" | "deep") =>
     req<ResearchJob>(`/api/notebooks/${id}/research`, { method: "POST", body: JSON.stringify({ query, mode }) }),
+  researchJob: (notebookId: string, jobId: string) =>
+    req<ResearchJob>(`/api/notebooks/${notebookId}/research/${jobId}`),
   importResearch: (notebookId: string, jobId: string, citationIds: string[], importReport: boolean) =>
     req<Source[]>(`/api/notebooks/${notebookId}/research/${jobId}/import`, {
       method: "POST",
@@ -78,6 +104,23 @@ export const api = {
   scoreEvalItem: (id: string, body: HumanScore) =>
     req<EvalItem>(`/api/eval/items/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   compareEval: (a: string, b: string) => req<EvalCompare>(`/api/eval/compare?a=${a}&b=${b}`),
+  generations: () => req<GenerationLog[]>("/api/eval/generations"),
+};
+
+export type GenerationLog = {
+  id: string;
+  notebook_id: string;
+  message_id: string | null;
+  kind: string;
+  model: string;
+  prompt: string;
+  raw_output: string;
+  visible_output: string;
+  reasoning: string[];
+  tool_calls: unknown[];
+  extra: Record<string, unknown>;
+  latency_ms: number;
+  created_at: string;
 };
 
 export type HumanScore = {

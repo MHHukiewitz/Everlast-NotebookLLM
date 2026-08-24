@@ -1,3 +1,9 @@
+export type AuthUser = {
+  id: string;
+  email: string;
+  is_demo: boolean;
+};
+
 export type Provider = {
   id: string;
   label: string;
@@ -22,6 +28,7 @@ export type Source = {
   status: string;
   selected: boolean;
   origin_uri: string | null;
+  favicon_url?: string | null;
   content_md: string;
   summary_md: string;
   research_mode: string | null;
@@ -45,6 +52,7 @@ export type Message = {
   tool_calls: unknown[];
   model: string | null;
   created_at: string;
+  reasoning?: string[];
 };
 
 export type ArtifactCitation = {

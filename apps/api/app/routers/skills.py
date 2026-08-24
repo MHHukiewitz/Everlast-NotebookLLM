@@ -5,9 +5,9 @@ from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.db import get_session
-from app.models import Artifact, Notebook
+from app.deps import current_tenant, current_user, owned_notebook
+from app.models import Artifact, Notebook, User
 from app.schemas import ArtifactOut, NoteIn, SkillCard, SkillRunIn
 from app.services.skills import STUDIO_CATALOG, run_skill
 from app.services.studio.export import export_artifact
@@ -16,25 +16,26 @@ api = APIRouter(prefix="/api")
 
 
 @api.get("/skills", response_model=list[SkillCard])
-async def list_skills() -> list[SkillCard]:
+async def list_skills(_: User = Depends(current_user)) -> list[SkillCard]:
     return STUDIO_CATALOG
 
 
 @api.get("/notebooks/{notebook_id}/artifacts", response_model=list[ArtifactOut])
-async def list_artifacts(notebook_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> list[Artifact]:
+async def list_artifacts(
+    notebook: Notebook = Depends(owned_notebook), session: AsyncSession = Depends(get_session)
+) -> list[Artifact]:
     result = await session.execute(
-        select(Artifact).where(Artifact.notebook_id == notebook_id).order_by(Artifact.created_at.desc())
+        select(Artifact).where(Artifact.notebook_id == notebook.id).order_by(Artifact.created_at.desc())
     )
     return list(result.scalars())
 
 
 @api.post("/notebooks/{notebook_id}/notes", response_model=ArtifactOut)
 async def create_note(
-    notebook_id: uuid.UUID, body: NoteIn, session: AsyncSession = Depends(get_session)
+    body: NoteIn,
+    notebook: Notebook = Depends(owned_notebook),
+    session: AsyncSession = Depends(get_session),
 ) -> Artifact:
-    notebook = await session.get(Notebook, notebook_id)
-    if notebook is None or notebook.tenant_id != settings.default_tenant_id:
-        raise HTTPException(404, "Notebook nicht gefunden")
     result = await run_skill(
         session,
         notebook,
@@ -49,13 +50,13 @@ async def create_note(
 
 @api.get("/notebooks/{notebook_id}/artifacts/{artifact_id}/export")
 async def export_artifact_file(
-    notebook_id: uuid.UUID,
     artifact_id: uuid.UUID,
+    notebook: Notebook = Depends(owned_notebook),
     fmt: str = Query("pdf", alias="format"),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     artifact = await session.get(Artifact, artifact_id)
-    if artifact is None or artifact.notebook_id != notebook_id:
+    if artifact is None or artifact.notebook_id != notebook.id:
         raise HTTPException(404, "Artefakt nicht gefunden")
     data, media_type, filename = export_artifact(
         artifact.type, artifact.title, artifact.payload or {}, fmt
@@ -69,10 +70,14 @@ async def export_artifact_file(
 
 @api.post("/skills/{skill_id}/run")
 async def run(
-    skill_id: str, notebook_id: uuid.UUID, body: SkillRunIn, session: AsyncSession = Depends(get_session)
+    skill_id: str,
+    notebook_id: uuid.UUID,
+    body: SkillRunIn,
+    session: AsyncSession = Depends(get_session),
+    tenant: str = Depends(current_tenant),
 ) -> dict:
     notebook = await session.get(Notebook, notebook_id)
-    if notebook is None:
+    if notebook is None or notebook.tenant_id != tenant:
         raise HTTPException(404, "Notebook nicht gefunden")
     locked = {card.id for card in STUDIO_CATALOG if card.status == "locked"}
     if skill_id in locked:

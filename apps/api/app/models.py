@@ -15,6 +15,15 @@ def new_id() -> uuid.UUID:
     return uuid.uuid4()
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_id)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Notebook(Base):
     __tablename__ = "notebooks"
 
@@ -44,6 +53,7 @@ class Source(Base):
     status: Mapped[str] = mapped_column(String(32), default="pending")
     selected: Mapped[bool] = mapped_column(Boolean, default=True)
     origin_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    favicon_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_md: Mapped[str] = mapped_column(Text, default="")
     summary_md: Mapped[str] = mapped_column(Text, default="")
     research_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -133,6 +143,29 @@ class Message(Base):
     tool_calls: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    raw_output: Mapped[str] = mapped_column(Text, default="")
+    reasoning: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class GenerationLog(Base):
+    __tablename__ = "generation_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    notebook_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("notebooks.id", ondelete="CASCADE"), index=True
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    kind: Mapped[str] = mapped_column(String(32), default="chat")
+    model: Mapped[str] = mapped_column(String(255), default="")
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    raw_output: Mapped[str] = mapped_column(Text, default="")
+    visible_output: Mapped[str] = mapped_column(Text, default="")
+    reasoning: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    tool_calls: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

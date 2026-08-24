@@ -1,12 +1,11 @@
-import uuid
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import get_session
-from app.models import AuditEvent, Notebook
+from app.deps import current_tenant, current_user, owned_notebook
+from app.models import AuditEvent, Notebook, User
 from app.schemas import NotebookOut, NotebookUpdate, ProviderStatus
 from app.services.connectors import router as model_router
 
@@ -14,14 +13,16 @@ api = APIRouter(prefix="/api")
 
 
 @api.get("/providers", response_model=list[ProviderStatus])
-async def providers() -> list[ProviderStatus]:
+async def providers(_: User = Depends(current_user)) -> list[ProviderStatus]:
     return model_router.list_providers()
 
 
 @api.post("/notebooks", response_model=NotebookOut)
-async def create_notebook(session: AsyncSession = Depends(get_session)) -> Notebook:
+async def create_notebook(
+    session: AsyncSession = Depends(get_session), tenant: str = Depends(current_tenant)
+) -> Notebook:
     notebook = Notebook(
-        tenant_id=settings.default_tenant_id,
+        tenant_id=tenant,
         title="Unbenanntes Notebook",
         provider=settings.default_provider,
         model_id=settings.default_model,
@@ -33,28 +34,26 @@ async def create_notebook(session: AsyncSession = Depends(get_session)) -> Noteb
 
 
 @api.get("/notebooks", response_model=list[NotebookOut])
-async def list_notebooks(session: AsyncSession = Depends(get_session)) -> list[Notebook]:
+async def list_notebooks(
+    session: AsyncSession = Depends(get_session), tenant: str = Depends(current_tenant)
+) -> list[Notebook]:
     result = await session.execute(
-        select(Notebook).where(Notebook.tenant_id == settings.default_tenant_id)
+        select(Notebook).where(Notebook.tenant_id == tenant).order_by(Notebook.created_at.asc())
     )
     return list(result.scalars())
 
 
 @api.get("/notebooks/{notebook_id}", response_model=NotebookOut)
-async def get_notebook(notebook_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> Notebook:
-    notebook = await session.get(Notebook, notebook_id)
-    if notebook is None or notebook.tenant_id != settings.default_tenant_id:
-        raise HTTPException(404, "Notebook nicht gefunden")
+async def get_notebook(notebook: Notebook = Depends(owned_notebook)) -> Notebook:
     return notebook
 
 
 @api.patch("/notebooks/{notebook_id}", response_model=NotebookOut)
 async def update_notebook(
-    notebook_id: uuid.UUID, body: NotebookUpdate, session: AsyncSession = Depends(get_session)
+    body: NotebookUpdate,
+    notebook: Notebook = Depends(owned_notebook),
+    session: AsyncSession = Depends(get_session),
 ) -> Notebook:
-    notebook = await session.get(Notebook, notebook_id)
-    if notebook is None or notebook.tenant_id != settings.default_tenant_id:
-        raise HTTPException(404, "Notebook nicht gefunden")
     if body.provider == "eu" and not body.eu_notice_accepted and not notebook.eu_notice_accepted:
         raise HTTPException(400, "EU-Hinweis muss bestätigt werden.")
     if body.provider == "openrouter" and not body.openrouter_notice_accepted and not notebook.openrouter_notice_accepted:
