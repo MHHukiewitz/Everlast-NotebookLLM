@@ -23,10 +23,30 @@ END_PAD_SEC = 0.35
 CLIP_PAD_SEC = 0.2
 FRAME_SIZE = (1280, 720)
 STYLES = {
-    "classic": {"bg": (255, 255, 255), "fg": (31, 31, 31), "muted": (115, 115, 115)},
-    "whiteboard": {"bg": (247, 243, 232), "fg": (42, 42, 42), "muted": (110, 100, 80)},
-    "kawaii": {"bg": (255, 240, 246), "fg": (91, 33, 182), "muted": (157, 23, 77)},
-    "auto": {"bg": (255, 255, 255), "fg": (31, 31, 31), "muted": (115, 115, 115)},
+    "classic": {
+        "bg": (255, 255, 255),
+        "fg": (31, 31, 31),
+        "muted": (115, 115, 115),
+        "accent": (15, 76, 129),
+    },
+    "whiteboard": {
+        "bg": (247, 243, 232),
+        "fg": (42, 42, 42),
+        "muted": (110, 100, 80),
+        "accent": (166, 124, 0),
+    },
+    "kawaii": {
+        "bg": (255, 240, 246),
+        "fg": (91, 33, 182),
+        "muted": (157, 23, 77),
+        "accent": (219, 39, 119),
+    },
+    "auto": {
+        "bg": (255, 255, 255),
+        "fg": (31, 31, 31),
+        "muted": (115, 115, 115),
+        "accent": (15, 76, 129),
+    },
 }
 
 
@@ -376,29 +396,35 @@ def render_style_frame(heading: str, bullets: list[str], style: str, dest: Path)
     title_font = _font(42)
     body_font = _font(26)
     mark_font = _font(14)
+    left = 80
     max_width = FRAME_SIZE[0] - 160
-    y = 80
-    for line in _wrap(draw, heading, title_font, max_width):
-        draw.text((80, y), line, font=title_font, fill=theme["fg"])
+    footer_y = FRAME_SIZE[1] - 56
+    draw.rectangle((0, 0, 16, FRAME_SIZE[1]), fill=theme["accent"])
+    draw.rectangle((0, 0, FRAME_SIZE[0], 8), fill=theme["accent"])
+    y = 64
+    title_lines = _wrap(draw, heading, title_font, max_width)
+    for line in title_lines:
+        draw.text((left, y), line, font=title_font, fill=theme["fg"])
         y += 52
-    y += 16
+    draw.rectangle((left, y + 4, left + 160, y + 8), fill=theme["accent"])
+    y += 28
     for bullet in bullets:
-        for index, line in enumerate(_wrap(draw, str(bullet), body_font, max_width - 24)):
-            prefix = "• " if index == 0 else "  "
-            draw.text((80, y), f"{prefix}{line}", font=body_font, fill=theme["fg"])
+        wrapped = _wrap(draw, str(bullet), body_font, max_width - 36)
+        needed = 36 * len(wrapped) + 8
+        if y + needed > footer_y:
+            break
+        for index, line in enumerate(wrapped):
+            prefix = "• " if index == 0 else "   "
+            draw.text((left, y), f"{prefix}{line}", font=body_font, fill=theme["fg"])
             y += 36
         y += 8
-    draw.text((80, FRAME_SIZE[1] - 48), AI_MARK, font=mark_font, fill=theme["muted"])
+    draw.text((left, footer_y), AI_MARK, font=mark_font, fill=theme["muted"])
     dest.parent.mkdir(parents=True, exist_ok=True)
     image.save(dest, format="PNG")
 
 
 def write_frame(notebook: Notebook, heading: str, bullets: list[str], style: str, dest: Path) -> None:
-    prompt = f"{style} presentation slide, no text: {heading}. {'; '.join(str(item) for item in bullets[:3])}"
-    raw = generate_image(notebook, prompt)
-    if raw:
-        dest.write_bytes(raw)
-        return
+    del notebook
     render_style_frame(heading, bullets, style, dest)
 
 

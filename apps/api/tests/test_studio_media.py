@@ -4,15 +4,19 @@ from pathlib import Path
 
 import pytest
 
+from PIL import Image
+
 from app.services.studio.media import (
     CLIP_PAD_SEC,
     END_PAD_SEC,
+    FRAME_SIZE,
     concat_mp3,
     hold_durations,
     join_video,
     media_duration,
     render_style_frame,
     wav_to_mp3,
+    write_frame,
 )
 
 ffmpeg_missing = shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None
@@ -111,3 +115,22 @@ def test_join_video_duration_covers_concatenated_speech(tmp_path: Path) -> None:
     assert audio_dur + 0.08 >= sum(lengths) + END_PAD_SEC
     assert video_dur + 0.08 >= audio_dur
     assert hold_durations(clips)[-1] + 0.05 >= media_duration(clips[-1])
+
+
+def test_write_frame_draws_slide_text_not_a_textless_image(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    called = []
+    monkeypatch.setattr("app.services.studio.media.generate_image", lambda *_args, **_kwargs: called.append(True) or b"fake")
+    dest = tmp_path / "slide.png"
+    write_frame(object(), "Titel der Folie", ["Erster Punkt", "Zweiter Punkt", "Dritter Punkt"], "classic", dest)
+    assert dest.is_file()
+    assert called == []
+    image = Image.open(dest).convert("RGB")
+    assert image.size == FRAME_SIZE
+    pixels = image.load()
+    dark = 0
+    for y in range(image.size[1]):
+        for x in range(image.size[0]):
+            red, green, blue = pixels[x, y]
+            if red < 80 and green < 80 and blue < 80:
+                dark += 1
+    assert dark > 200
