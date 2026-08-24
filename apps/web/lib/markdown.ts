@@ -12,6 +12,13 @@ export function normalizeMarkdown(text: string): string {
 const GROUPED_CITE = /\[(\d+(?:\s*,\s*\d+)+)\]/g;
 const GROUPED_PROTECTED = /⟦(\d+(?:\s*,\s*\d+)+)⟧/g;
 
+export function unwrapCiteMarkdownLinks(text: string): string {
+  return (text || "")
+    .replace(/\[⟦(\d+)⟧\]\([^)\n]+\)/g, "[$1]")
+    .replace(/\[\[(\d+)\]\]\([^)\n]+\)/g, "[$1]")
+    .replace(/⟦(\d+)⟧\([^)\n]+\)/g, "[$1]");
+}
+
 export function expandGroupedCiteMarks(text: string): string {
   const expand = (nums: string, wrap: (n: string) => string) =>
     nums
@@ -25,7 +32,7 @@ export function expandGroupedCiteMarks(text: string): string {
 }
 
 export function protectCiteMarks(text: string): string {
-  return expandGroupedCiteMarks(text || "").replace(/\[(\d+)\]/g, "⟦$1⟧");
+  return expandGroupedCiteMarks(unwrapCiteMarkdownLinks(text || "")).replace(/\[(\d+)\]/g, "⟦$1⟧");
 }
 
 function unwrapOuterFence(text: string): string {

@@ -43,6 +43,7 @@ export type Source = {
   favicon_url?: string | null;
   content_md: string;
   summary_md: string;
+  summary_status?: string;
   research_mode: string | null;
   created_at: string;
 };

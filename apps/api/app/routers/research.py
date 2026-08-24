@@ -42,7 +42,7 @@ async def get_research(
     if job is None or job.notebook_id != notebook.id:
         raise HTTPException(404, "Recherche nicht gefunden")
     cites = (
-        await session.execute(select(Citation).where(Citation.research_job_id == job.id))
+        await session.execute(select(Citation).where(Citation.research_job_id == job.id).order_by(Citation.id))
     ).scalars()
     return ResearchJobOut.model_validate(job).model_copy(update={"candidates": list(cites)})
 
@@ -66,6 +66,6 @@ async def import_job(
     await session.refresh(job)
     background_tasks.add_task(import_research_isolated, job.id, list(body.citation_ids), body.import_report)
     cites = (
-        await session.execute(select(Citation).where(Citation.research_job_id == job.id))
+        await session.execute(select(Citation).where(Citation.research_job_id == job.id).order_by(Citation.id))
     ).scalars()
     return ResearchJobOut.model_validate(job).model_copy(update={"candidates": list(cites)})

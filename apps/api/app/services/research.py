@@ -22,7 +22,6 @@ from app.services.ingest import (
     favicon_from_url,
     finalize_source,
     ground_summary,
-    refresh_model_summary,
     unwrap_markdown_fence,
 )
 from app.services.net import host_open
@@ -181,7 +180,11 @@ def _provider_ready(notebook: Notebook | None) -> bool:
 
 async def write_research_report(session: AsyncSession, job: ResearchJob) -> None:
     cites = list(
-        (await session.execute(select(Citation).where(Citation.research_job_id == job.id))).scalars()
+        (
+            await session.execute(
+                select(Citation).where(Citation.research_job_id == job.id).order_by(Citation.id)
+            )
+        ).scalars()
     )
     items = _citation_items(cites)
     fallback = fallback_report(job.mode, items)
@@ -238,7 +241,6 @@ async def prepare_imported_sources(source_ids: list[uuid.UUID]) -> None:
     if not source_ids:
         return
     await asyncio.gather(*[embed_source_isolated(source_id) for source_id in source_ids])
-    await asyncio.gather(*[refresh_model_summary(source_id) for source_id in source_ids])
 
 
 async def run_fast_research(session: AsyncSession, job: ResearchJob) -> None:

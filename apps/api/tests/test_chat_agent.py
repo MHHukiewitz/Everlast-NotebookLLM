@@ -103,7 +103,7 @@ def test_context_from_chunks_numbers_sources() -> None:
 
 def test_chat_refreshes_after_source_change() -> None:
     src = inspect.getsource(run_chat)
-    assert src.count("hybrid_search") >= 2
+    assert src.count("retrieve_chunks") >= 2
     assert "context_from_chunks" in src
 
 
@@ -435,7 +435,7 @@ def test_run_chat_emits_retrieve_step(monkeypatch) -> None:
         return []
 
     async def fake_search(*_args, **_kwargs):
-        return chunks
+        return chunks, "Everlast AI"
 
     async def fake_stream(*_args, **_kwargs):
         yield SimpleNamespace(choices=[SimpleNamespace(delta=_delta(content="Kurzantwort."))])
@@ -444,7 +444,7 @@ def test_run_chat_emits_retrieve_step(monkeypatch) -> None:
         return
 
     monkeypatch.setattr("app.services.chat_agent.selected_source_ids", fake_ids)
-    monkeypatch.setattr("app.services.chat_agent.hybrid_search", fake_search)
+    monkeypatch.setattr("app.services.chat_agent.retrieve_chunks", fake_search)
     monkeypatch.setattr("app.services.chat_agent._host_open", lambda *_args, **_kwargs: True)
     monkeypatch.setattr("app.services.chat_agent.router.stream_chat", fake_stream)
     monkeypatch.setattr("app.services.chat_agent.record_generation", fake_record)
@@ -465,7 +465,7 @@ def test_run_chat_emits_retrieve_step(monkeypatch) -> None:
     events = asyncio.run(collect())
     retrieve = [event for event in events if event.get("event") == "step" and event.get("kind") == "retrieve"]
     assert retrieve
-    assert retrieve[0]["detail"] == "2 Treffer in 2 Quellen"
+    assert retrieve[0]["detail"].startswith("2 Treffer in 2 Quellen")
     assert all(event["event"] != "think" for event in events)
     done = next(event for event in events if event["event"] == "done")
     assert [item["n"] for item in done["citations"]] == [1, 2]
@@ -481,7 +481,7 @@ def test_run_chat_keeps_used_citations_only(monkeypatch) -> None:
         return []
 
     async def fake_search(*_args, **_kwargs):
-        return chunks
+        return chunks, "Everlast AI"
 
     async def fake_stream(*_args, **_kwargs):
         yield SimpleNamespace(
@@ -492,7 +492,7 @@ def test_run_chat_keeps_used_citations_only(monkeypatch) -> None:
         return
 
     monkeypatch.setattr("app.services.chat_agent.selected_source_ids", fake_ids)
-    monkeypatch.setattr("app.services.chat_agent.hybrid_search", fake_search)
+    monkeypatch.setattr("app.services.chat_agent.retrieve_chunks", fake_search)
     monkeypatch.setattr("app.services.chat_agent._host_open", lambda *_args, **_kwargs: True)
     monkeypatch.setattr("app.services.chat_agent.router.stream_chat", fake_stream)
     monkeypatch.setattr("app.services.chat_agent.record_generation", fake_record)

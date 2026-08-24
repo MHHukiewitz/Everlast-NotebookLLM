@@ -1,6 +1,13 @@
 from types import SimpleNamespace
 
-from app.services.retrieve import query_tokens, select_diverse_chunks, title_boost
+from app.services.retrieve import (
+    LOW_SCORE,
+    merge_chunks,
+    query_tokens,
+    search_is_weak,
+    select_diverse_chunks,
+    title_boost,
+)
 
 
 def test_title_boost_matches_query_name() -> None:
@@ -28,3 +35,17 @@ def test_select_diverse_chunks_caps_per_source() -> None:
     assert counts["everlast"] == 2
     assert counts["other"] == 2
     assert len(picked) == 8
+
+
+def test_search_is_weak_for_empty_or_low_score() -> None:
+    assert search_is_weak([], 4) is True
+    assert search_is_weak([{"score": LOW_SCORE - 0.01, "source_id": "a"}], 4) is True
+    assert search_is_weak([{"score": 0.8, "source_id": "a"}], 3) is False
+    assert search_is_weak([{"score": 0.8, "source_id": "a"}], 12) is True
+
+
+def test_merge_chunks_dedupes_and_caps() -> None:
+    first = [{"chunk_id": "1", "text": "a"}, {"chunk_id": "2", "text": "b"}]
+    second = [{"chunk_id": "2", "text": "dup"}, {"chunk_id": "3", "text": "c"}]
+    merged = merge_chunks(first, second, limit=2)
+    assert [item["chunk_id"] for item in merged] == ["1", "2"]

@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import Artifact, Notebook, Source
 from app.services.connectors import router
-from app.services.retrieve import hybrid_search
+from app.services.retrieve import notebook_search
+from app.services.search_query import rewrite_search_query
 from app.services.tracing import pack_prompt, record_generation, start_trace
 
 DEFAULT_QUERY = "Kernaussagen der Quellen"
@@ -197,7 +198,10 @@ async def retrieve_context(
     if not chosen:
         raise ValueError("Wähle mindestens eine Quelle.")
     query = topic.strip() or DEFAULT_QUERY
-    chunks = await hybrid_search(session, notebook.id, notebook.tenant_id, query, chosen)
+    rewritten = await rewrite_search_query(query)
+    chunks = await notebook_search(
+        session, notebook.id, notebook.tenant_id, query, chosen, rewritten
+    )
     if not chunks:
         raise ValueError("Die gewählten Quellen haben keine durchsuchbaren Abschnitte.")
     blocks: list[str] = []

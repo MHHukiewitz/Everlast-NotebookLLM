@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     hetzner_api_base: str = "https://inference.hetzner.com/api/v1"
     hetzner_api_key: str = ""
     hetzner_models: str = "Qwen/Qwen3.6-35B-A3B-FP8,Qwen3.8-27B"
+    search_rewrite_provider: str = ""
+    search_rewrite_model: str = "Qwen3.8-27B"
 
     embedding_backend: str = "ollama"
     embedding_dim: int = 768

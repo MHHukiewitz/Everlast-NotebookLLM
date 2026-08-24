@@ -108,6 +108,7 @@ export const t = {
   cited: "Im Bericht zitiert",
   notCited: "Nicht zitiert",
   downloadPdf: "Als PDF laden",
+  summaryPending: "Zusammenfassung wird erstellt…",
   saveNote: "In Notiz speichern",
   thoughts: "Ablauf",
   traceBusy: "Ablauf…",

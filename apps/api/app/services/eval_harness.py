@@ -102,6 +102,7 @@ async def upsert_eval_source(
     source.content_md = text
     summary, latency_ms = await write_model_summary(session, source, text)
     source.summary_md = summary
+    source.summary_status = "ready"
     source.status = "ready"
     await write_chunks(session, source, text)
     await session.commit()

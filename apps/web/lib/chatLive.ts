@@ -303,6 +303,21 @@ export function bindChatCitations<T extends { n: number; quote?: string; source_
   return out;
 }
 
+export function bindIndexedCitations(
+  text: string,
+  items: Array<{ url?: string | null; title?: string; quote?: string }>,
+): ReturnType<typeof bindChatCitations> {
+  return bindChatCitations(
+    text,
+    items.map((item, index) => ({
+      n: index + 1,
+      quote: item.quote || item.title || "",
+      title: item.title,
+      url: item.url || undefined,
+    })),
+  );
+}
+
 const SELF_INTRO = /^(?:Ich bin(?: Everlast Notebook,)? ein KI-System\.|Ich bin Everlast Notebook\.)\s*/i;
 
 export function stripSelfIntro(text: string): string {

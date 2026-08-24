@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   applyChatEvent,
   bindChatCitations,
+  bindIndexedCitations,
   citationMarks,
   displayChatText,
   stripSelfIntro,
@@ -11,7 +12,7 @@ import {
   visibleChatText,
   type LivePart,
 } from "./chatLive";
-import { protectCiteMarks } from "./markdown";
+import { protectCiteMarks, unwrapCiteMarkdownLinks } from "./markdown";
 
 function nextId() {
   let n = 0;
@@ -103,6 +104,10 @@ assert.deepEqual(citationMarks("Foundation [2][4] und [5][2]."), [2, 4, 5, 2]);
 assert.deepEqual(citationMarks("Die Firma sitzt in Berlin [7, 5]."), [7, 5]);
 assert.deepEqual(citationMarks("Siehe [7,5, 3] und [2]."), [7, 5, 3, 2]);
 assert.equal(protectCiteMarks("Siehe [7, 5] und [2]."), "Siehe ⟦7⟧⟦5⟧ und ⟦2⟧.");
+assert.equal(unwrapCiteMarkdownLinks("Fact [[4]](https://botgenossen.de)"), "Fact [4]");
+assert.equal(unwrapCiteMarkdownLinks("Fact [⟦4⟧](https://botgenossen.de)"), "Fact [4]");
+assert.equal(protectCiteMarks("Fact [[4]](https://botgenossen.de) and [7]."), "Fact ⟦4⟧ and ⟦7⟧.");
+assert.equal(protectCiteMarks("Fact [[4]](https://botgenossen.de) and [7].").includes("("), false);
 assert.deepEqual(
   usedCitations("Foundation [2][4].", [
     { n: "2" as unknown as number, quote: "a" },
@@ -125,5 +130,21 @@ assert.deepEqual(
     [2, "", "chunk two"],
     [4, "s4", "Vier"],
     [5, "s5", "Fünf"],
+  ],
+);
+const indexed = bindIndexedCitations("Botgenossen [4] und [7].", [
+  { title: "Eins", url: "https://one.example" },
+  { title: "Zwei", url: "https://two.example" },
+  { title: "Drei", url: "https://three.example" },
+  { title: "Botgenossen", url: "https://botgenossen.de" },
+  { title: "Fünf", url: "https://five.example" },
+  { title: "Sechs", url: "https://six.example" },
+  { title: "ROOVER", url: "https://roover.example" },
+]);
+assert.deepEqual(
+  indexed.map((item) => [item.n, item.url, item.title]),
+  [
+    [4, "https://botgenossen.de", "Botgenossen"],
+    [7, "https://roover.example", "ROOVER"],
   ],
 );

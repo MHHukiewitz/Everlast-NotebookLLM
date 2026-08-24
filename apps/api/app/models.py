@@ -60,6 +60,7 @@ class Source(Base):
     favicon_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_md: Mapped[str] = mapped_column(Text, default="")
     summary_md: Mapped[str] = mapped_column(Text, default="")
+    summary_status: Mapped[str] = mapped_column(String(16), default="pending")
     research_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
     file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

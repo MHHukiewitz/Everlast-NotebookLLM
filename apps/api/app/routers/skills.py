@@ -10,7 +10,7 @@ from app.deps import current_tenant, current_user, owned_notebook
 from app.models import Artifact, Notebook, Source, User
 from app.schemas import ArtifactOut, NoteIn, SkillCard, SkillRunIn, SourceOut
 from app.services.autoname import maybe_autoname
-from app.services.ingest import ingest_text, refresh_model_summary
+from app.services.ingest import ingest_text
 from app.services.skills import STUDIO_CATALOG, run_skill
 from app.services.studio.export import artifact_markdown, export_artifact
 from app.services.studio.media import media_file, remove_artifact_files, synthesize_media_isolated
@@ -96,7 +96,6 @@ async def artifact_media(
 @api.post("/notebooks/{notebook_id}/artifacts/{artifact_id}/source", response_model=SourceOut)
 async def artifact_as_source(
     artifact_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     notebook: Notebook = Depends(owned_notebook),
     session: AsyncSession = Depends(get_session),
 ) -> Source:
@@ -122,7 +121,6 @@ async def artifact_as_source(
     await ingest_text(session, source, text, use_model_summary=False)
     if maybe_autoname(notebook, source.title):
         await session.commit()
-    background_tasks.add_task(refresh_model_summary, source.id)
     return source
 
 

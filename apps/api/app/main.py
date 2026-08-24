@@ -22,6 +22,10 @@ async def lifespan(_: FastAPI):
             text("ALTER TABLE eval_items ADD COLUMN IF NOT EXISTS task VARCHAR(32) DEFAULT 'chat'")
         )
         await conn.execute(text("ALTER TABLE sources ADD COLUMN IF NOT EXISTS favicon_url TEXT"))
+        await conn.execute(text("ALTER TABLE sources ADD COLUMN IF NOT EXISTS summary_status VARCHAR(16) DEFAULT 'pending'"))
+        await conn.execute(
+            text("UPDATE sources SET summary_status = 'ready' WHERE summary_md <> '' AND summary_status = 'pending'")
+        )
         await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS raw_output TEXT DEFAULT ''"))
         await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS reasoning JSONB DEFAULT '[]'::jsonb"))
         await conn.execute(text("ALTER TABLE notebooks ADD COLUMN IF NOT EXISTS tts_provider VARCHAR(32) DEFAULT 'local'"))

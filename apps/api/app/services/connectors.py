@@ -224,6 +224,7 @@ class ModelRouter:
         model_id: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> Any:
         route = self.resolve(provider, model_id)
         kwargs: dict[str, Any] = {
@@ -231,6 +232,8 @@ class ModelRouter:
             "messages": messages,
             "stream": False,
         }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
         if "api_base" in route:
             kwargs["api_base"] = route["api_base"]
         if "api_key" in route:

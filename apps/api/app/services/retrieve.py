@@ -24,6 +24,11 @@ def title_boost(title: str, tokens: set[str]) -> float:
     return 0.0
 
 
+SEARCH_LIMIT = 8
+WIDE_LIMIT = 20
+LOW_SCORE = 0.22
+
+
 def select_diverse_chunks(rows: list[Any], limit: int = 8, per_source: int = 3) -> list[Any]:
     picked: list[Any] = []
     counts: dict[Any, int] = {}
@@ -50,7 +55,8 @@ async def hybrid_search(
     tenant_id: str,
     query: str,
     source_ids: list[uuid.UUID] | None,
-    limit: int = 8,
+    limit: int = SEARCH_LIMIT,
+    per_source: int = 3,
 ) -> list[dict[str, Any]]:
     if not source_ids:
         return []
@@ -88,7 +94,7 @@ async def hybrid_search(
         ),
         reverse=True,
     )
-    top = select_diverse_chunks(ranked, limit=limit, per_source=3)
+    top = select_diverse_chunks(ranked, limit=limit, per_source=per_source)
     if not top:
         return []
     return [
@@ -102,6 +108,62 @@ async def hybrid_search(
         }
         for row in top
     ]
+
+
+def chunk_score(chunk: dict[str, Any]) -> float:
+    return float(chunk.get("score") or 0)
+
+
+def search_is_weak(chunks: list[dict[str, Any]], source_count: int) -> bool:
+    if not chunks:
+        return True
+    if max(chunk_score(chunk) for chunk in chunks) < LOW_SCORE:
+        return True
+    hit_sources = {str(chunk.get("source_id") or "") for chunk in chunks}
+    hit_sources.discard("")
+    if source_count > SEARCH_LIMIT and len(hit_sources) < min(source_count, 6):
+        return True
+    return False
+
+
+def merge_chunks(*groups: list[dict[str, Any]], limit: int = WIDE_LIMIT) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for group in groups:
+        for chunk in group:
+            key = str(chunk.get("chunk_id") or "")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(chunk)
+            if len(out) >= limit:
+                return out
+    return out
+
+
+async def notebook_search(
+    session: AsyncSession,
+    notebook_id: uuid.UUID,
+    tenant_id: str,
+    query: str,
+    source_ids: list[uuid.UUID] | None,
+    rewritten: str = "",
+    force_wide: bool = False,
+) -> list[dict[str, Any]]:
+    primary = (rewritten or query).strip() or query
+    first = await hybrid_search(session, notebook_id, tenant_id, primary, source_ids, limit=SEARCH_LIMIT)
+    source_count = len(source_ids or [])
+    if not force_wide and not search_is_weak(first, source_count):
+        return first
+    wide = await hybrid_search(
+        session, notebook_id, tenant_id, primary, source_ids, limit=WIDE_LIMIT, per_source=2
+    )
+    extra: list[dict[str, Any]] = []
+    if primary != query.strip():
+        extra = await hybrid_search(
+            session, notebook_id, tenant_id, query, source_ids, limit=WIDE_LIMIT, per_source=2
+        )
+    return merge_chunks(wide, extra, first, limit=WIDE_LIMIT)
 
 
 def overlap_score(answer: str, chunks: list[dict[str, Any]]) -> float:

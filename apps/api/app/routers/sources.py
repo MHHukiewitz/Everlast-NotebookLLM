@@ -38,6 +38,7 @@ async def list_sources(
 @api.get("/sources/{source_id}", response_model=SourceDetail)
 async def get_source(
     source_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     notebook: Notebook = Depends(owned_notebook),
     session: AsyncSession = Depends(get_session),
 ) -> SourceDetail:
@@ -45,15 +46,18 @@ async def get_source(
     if source is None or source.notebook_id != notebook.id:
         raise HTTPException(404, "Quelle nicht gefunden")
     cites = (
-        await session.execute(select(Citation).where(Citation.source_id == source.id))
+        await session.execute(select(Citation).where(Citation.source_id == source.id).order_by(Citation.id))
     ).scalars()
+    if source.summary_status == "pending":
+        source.summary_status = "running"
+        await session.commit()
+        background_tasks.add_task(refresh_model_summary, source.id)
     return SourceDetail.model_validate(source).model_copy(update={"citations": list(cites)})
 
 
 @api.post("/sources/url", response_model=SourceOut)
 async def add_url(
     body: AddUrlIn,
-    background_tasks: BackgroundTasks,
     notebook: Notebook = Depends(owned_notebook),
     session: AsyncSession = Depends(get_session),
 ) -> Source:
@@ -71,14 +75,12 @@ async def add_url(
     maybe_autoname(notebook, source.title or body.url)
     session.add(AuditEvent(tenant_id=notebook.tenant_id, notebook_id=notebook.id, action="source.add_url", detail={"url": body.url}))
     await session.commit()
-    background_tasks.add_task(refresh_model_summary, source.id)
     return source
 
 
 @api.post("/sources/text", response_model=SourceOut)
 async def add_text(
     body: AddTextIn,
-    background_tasks: BackgroundTasks,
     notebook: Notebook = Depends(owned_notebook),
     session: AsyncSession = Depends(get_session),
 ) -> Source:
@@ -94,13 +96,11 @@ async def add_text(
     await ingest_text(session, source, body.text, use_model_summary=False)
     if maybe_autoname(notebook, source.title or body.text):
         await session.commit()
-    background_tasks.add_task(refresh_model_summary, source.id)
     return source
 
 
 @api.post("/sources/file", response_model=SourceOut)
 async def add_file(
-    background_tasks: BackgroundTasks,
     notebook: Notebook = Depends(owned_notebook),
     upload: UploadFile = File(...),
     session: AsyncSession = Depends(get_session),
@@ -125,7 +125,6 @@ async def add_file(
     await finalize_source(session, source, text, use_model_summary=False)
     if maybe_autoname(notebook, source.title or filename):
         await session.commit()
-    background_tasks.add_task(refresh_model_summary, source.id)
     return source
 
 

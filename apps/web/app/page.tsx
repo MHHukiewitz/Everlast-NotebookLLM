@@ -17,6 +17,7 @@ import {
   stepsFromReasoning,
   toolCallsFromMessage,
   bindChatCitations,
+  bindIndexedCitations,
   type LivePart,
 } from "@/lib/chatLive";
 import { ThinkingTrace } from "@/components/chat/ThinkingTrace";
@@ -28,6 +29,7 @@ import { DEFAULT_SOURCE_SORT, formatSourceSort, parseSourceSort, sortSources, ty
 import type {
   Artifact,
   AuthUser,
+  Citation,
   Message,
   MessageCitation,
   Modalities,
@@ -61,6 +63,43 @@ function SourceIcon({ origin, favicon }: { origin: string | null | undefined; fa
         onError={() => setBroken(true)}
       />
     </span>
+  );
+}
+
+function ResearchCandidate({
+  candidate,
+  checked,
+  disabled,
+  onToggle,
+}: {
+  candidate: Citation;
+  checked: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}) {
+  const inputId = `research-cite-${candidate.id}`;
+  return (
+    <div className="flex items-start gap-2">
+      <input
+        id={inputId}
+        type="checkbox"
+        className="mt-1"
+        checked={checked}
+        disabled={disabled}
+        onChange={onToggle}
+      />
+      <SourceIcon origin={candidate.url} />
+      <span>
+        <label htmlFor={inputId} className="block">
+          {candidate.title}
+        </label>
+        {isHttpUrl(candidate.url) && (
+          <a className="block break-all text-xs text-accent" href={candidate.url} target="_blank" rel="noreferrer">
+            {displayUrl(candidate.url)}
+          </a>
+        )}
+      </span>
+    </div>
   );
 }
 
@@ -343,6 +382,18 @@ export default function Page() {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [notebook, researchId, researchStatus, shouldPollResearch, refresh, syncNotebook]);
+
+  const activeSourceId = activeSource?.id;
+  const activeSummaryStatus = activeSource?.summary_status || "ready";
+  const shouldPollSummary = Boolean(activeSourceId && activeSummaryStatus !== "ready");
+
+  useEffect(() => {
+    if (!notebook || !activeSourceId || !shouldPollSummary) return;
+    const timer = window.setInterval(() => {
+      api.source(notebook.id, activeSourceId).then(setActiveSource);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [notebook, activeSourceId, shouldPollSummary]);
 
   async function onResearch() {
     if (!notebook || researchBusy) return;
@@ -871,51 +922,41 @@ export default function Page() {
                   ← {t.cancelResearch}
                 </button>
                 {research.report_md.trim() ? (
-                  <MarkdownBody>{research.report_md}</MarkdownBody>
+                  <MarkdownBody
+                    citations={bindIndexedCitations(
+                      research.report_md,
+                      [...research.candidates].sort((a, b) => a.id.localeCompare(b.id)),
+                    )}
+                    onCite={openCite}
+                  >
+                    {research.report_md}
+                  </MarkdownBody>
                 ) : (
                   <p className="text-xs text-neutral-500">{t.reportPending}</p>
                 )}
                 <p className="font-medium">{t.cited}</p>
                 {research.candidates.filter((c) => c.cited_in_report).map((c) => (
-                  <label key={c.id} className="flex items-start gap-2">
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={selectedCites.includes(c.id)}
-                      disabled={locks.sourceResearchDisabled}
-                      onChange={() =>
-                        setSelectedCites((ids) => (ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id]))
-                      }
-                    />
-                    <SourceIcon origin={c.url} />
-                    <span>
-                      <span className="block">{c.title}</span>
-                      {isHttpUrl(c.url) && (
-                        <span className="block break-all text-xs text-neutral-500">{displayUrl(c.url)}</span>
-                      )}
-                    </span>
-                  </label>
+                  <ResearchCandidate
+                    key={c.id}
+                    candidate={c}
+                    checked={selectedCites.includes(c.id)}
+                    disabled={locks.sourceResearchDisabled}
+                    onToggle={() =>
+                      setSelectedCites((ids) => (ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id]))
+                    }
+                  />
                 ))}
                 <p className="font-medium">{t.notCited}</p>
                 {research.candidates.filter((c) => !c.cited_in_report).map((c) => (
-                  <label key={c.id} className="flex items-start gap-2">
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={selectedCites.includes(c.id)}
-                      disabled={locks.sourceResearchDisabled}
-                      onChange={() =>
-                        setSelectedCites((ids) => (ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id]))
-                      }
-                    />
-                    <SourceIcon origin={c.url} />
-                    <span>
-                      <span className="block">{c.title}</span>
-                      {isHttpUrl(c.url) && (
-                        <span className="block break-all text-xs text-neutral-500">{displayUrl(c.url)}</span>
-                      )}
-                    </span>
-                  </label>
+                  <ResearchCandidate
+                    key={c.id}
+                    candidate={c}
+                    checked={selectedCites.includes(c.id)}
+                    disabled={locks.sourceResearchDisabled}
+                    onToggle={() =>
+                      setSelectedCites((ids) => (ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id]))
+                    }
+                  />
                 ))}
                 <button className="btn-primary" disabled={locks.sourceResearchDisabled} onClick={onImport}>
                   {researchBusy ? t.importing : t.import}
@@ -942,7 +983,18 @@ export default function Page() {
                     )}
                   </div>
                 </div>
-                <MarkdownBody>{activeSource.summary_md || activeSource.content_md}</MarkdownBody>
+                {activeSummaryStatus !== "ready" && (
+                  <p className="text-xs text-neutral-500">{t.summaryPending}</p>
+                )}
+                <MarkdownBody
+                  citations={bindIndexedCitations(
+                    activeSource.summary_md || activeSource.content_md,
+                    activeSource.citations,
+                  )}
+                  onCite={openCite}
+                >
+                  {activeSource.summary_md || activeSource.content_md}
+                </MarkdownBody>
                 <div className="flex flex-wrap gap-2">
                   <a className="btn-primary inline-block" href={api.pdfUrl(notebook.id, activeSource.id)}>
                     {t.downloadPdf}

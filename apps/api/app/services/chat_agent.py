@@ -14,7 +14,8 @@ from app.config import settings
 from app.models import Citation, Message, Notebook, ResearchJob, Source
 from app.services.connectors import router
 from app.services.research import searx_reachable
-from app.services.retrieve import hybrid_search, overlap_score
+from app.services.retrieve import notebook_search, overlap_score, search_is_weak
+from app.services.search_query import rewrite_search_query
 from app.services.skills import CHAT_TOOLS, REGISTRY, resolve_tool_name, run_skill, tool_schema
 from app.services.tracing import pack_prompt, record_generation, start_trace
 
@@ -124,12 +125,38 @@ def new_step_id() -> str:
     return f"step_{uuid.uuid4().hex[:12]}"
 
 
-def retrieve_step_detail(chunks: list[dict[str, Any]]) -> str:
+def retrieve_step_detail(chunks: list[dict[str, Any]], query: str = "") -> str:
     if not chunks:
         return "Keine Treffer"
     sources = {str(chunk.get("source_id") or "") for chunk in chunks}
     sources.discard("")
-    return f"{len(chunks)} Treffer in {len(sources)} Quellen"
+    detail = f"{len(chunks)} Treffer in {len(sources)} Quellen"
+    cleaned = query.strip()
+    if cleaned:
+        return f"{detail} · Suche: {cleaned}"
+    return detail
+
+
+async def retrieve_chunks(
+    session: AsyncSession,
+    notebook: Notebook,
+    query: str,
+    source_ids: list[uuid.UUID],
+    force_wide: bool = False,
+) -> tuple[list[dict[str, Any]], str]:
+    if not source_ids:
+        return [], query
+    rewritten = await rewrite_search_query(query)
+    chunks = await notebook_search(
+        session,
+        notebook.id,
+        notebook.tenant_id,
+        query,
+        source_ids,
+        rewritten,
+        force_wide=force_wide,
+    )
+    return chunks, rewritten or query
 
 
 def context_from_chunks(chunks: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
@@ -818,8 +845,8 @@ async def run_chat(
         return
 
     source_ids = await selected_source_ids(session, notebook.id)
-    chunks = await hybrid_search(session, notebook.id, notebook.tenant_id, user_text, source_ids)
-    retrieve = step_event("retrieve", "Quellen durchsuchen", retrieve_step_detail(chunks))
+    chunks, search_query = await retrieve_chunks(session, notebook, user_text, source_ids)
+    retrieve = step_event("retrieve", "Quellen durchsuchen", retrieve_step_detail(chunks, search_query))
     record_step(reasoning, retrieve)
     yield retrieve
     context_blocks, citation_map = context_from_chunks(chunks)
@@ -902,13 +929,13 @@ async def run_chat(
             break
         if mutated_sources:
             source_ids = await selected_source_ids(session, notebook.id)
-            chunks = await hybrid_search(session, notebook.id, notebook.tenant_id, user_text, source_ids)
+            chunks, search_query = await retrieve_chunks(session, notebook, user_text, source_ids)
             context_blocks, citation_map = context_from_chunks(chunks)
             system = SYSTEM
             if context_blocks:
                 system = join_system(SYSTEM, "Quellenkontext:\n" + "\n\n".join(context_blocks))
             messages[0] = {"role": "system", "content": system}
-            retrieve = step_event("retrieve", "Quellen durchsuchen", retrieve_step_detail(chunks))
+            retrieve = step_event("retrieve", "Quellen durchsuchen", retrieve_step_detail(chunks, search_query))
             record_step(reasoning, retrieve)
             yield retrieve
             mutated_sources = False
@@ -918,6 +945,20 @@ async def run_chat(
     if chunks and tools_enabled and not pending_job_id:
         visible = assistant_text.strip()
         if not visible or visible == NO_ANSWER:
+            if search_is_weak(chunks, len(source_ids)):
+                chunks, search_query = await retrieve_chunks(
+                    session, notebook, user_text, source_ids, force_wide=True
+                )
+                context_blocks, citation_map = context_from_chunks(chunks)
+                system = SYSTEM
+                if context_blocks:
+                    system = join_system(SYSTEM, "Quellenkontext:\n" + "\n\n".join(context_blocks))
+                messages[0] = {"role": "system", "content": system}
+                retrieve = step_event(
+                    "retrieve", "Quellen durchsuchen", retrieve_step_detail(chunks, search_query)
+                )
+                record_step(reasoning, retrieve)
+                yield retrieve
             retry_messages = [item for item in messages if item.get("role") == "system"]
             retry_messages.append({"role": "user", "content": user_text})
             retry_executed: list[dict[str, Any]] = []

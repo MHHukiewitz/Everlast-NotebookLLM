@@ -72,6 +72,7 @@ class SourceOut(BaseModel):
     favicon_url: str | None = None
     content_md: str
     summary_md: str
+    summary_status: str = "pending"
     research_mode: str | None
     created_at: datetime
 

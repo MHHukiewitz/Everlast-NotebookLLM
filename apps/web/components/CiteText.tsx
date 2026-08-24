@@ -52,8 +52,8 @@ export function injectCites(
     if (node.type === "a") {
       const raw = node.props.children;
       const label = typeof raw === "string" || typeof raw === "number" ? String(raw) : "";
-      const mark = label.match(/^\[?(\d+(?:\s*,\s*\d+)*)\]?$/);
-      if (mark) return replaceCiteMarks(`[${mark[1]}]`, citations, onCite);
+      const mark = label.match(/^(?:⟦(\d+)⟧|\[(\d+)\])$/);
+      if (mark) return replaceCiteMarks(`[${mark[1] || mark[2]}]`, citations, onCite);
       return node;
     }
     return cloneElement(node, undefined, injectCites(node.props.children, citations, onCite));

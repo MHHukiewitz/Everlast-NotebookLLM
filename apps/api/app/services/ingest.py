@@ -378,6 +378,7 @@ async def refresh_model_summary(source_id: uuid.UUID) -> None:
             return
         summary, _latency = await write_model_summary(session, source, source.content_md)
         source.summary_md = summary
+        source.summary_status = "ready"
         await session.commit()
 
 
@@ -393,8 +394,10 @@ async def finalize_source(
     if use_model_summary:
         summary, _latency = await write_model_summary(session, source, text)
         source.summary_md = summary
+        source.summary_status = "ready"
     else:
         source.summary_md = build_source_report(source.title, text, source.origin_uri)
+        source.summary_status = "pending"
     source.status = "ready"
     await write_chunks(session, source, text, embed=embed)
     if citations:
