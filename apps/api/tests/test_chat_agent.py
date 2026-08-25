@@ -89,6 +89,14 @@ def test_research_scratch_lists_candidates() -> None:
     assert cites[0]["n"] == 1
 
 
+def test_research_scratch_reads_orm_citation_with_empty_quote() -> None:
+    row = SimpleNamespace(title="Everlast", url="https://de.wikipedia.org/wiki/Everlast", quote="")
+    text, cites = research_scratch("# Bericht", [row])
+    assert "https://de.wikipedia.org/wiki/Everlast" in text
+    assert cites[0]["title"] == "Everlast"
+    assert cites[0]["quote"] == ""
+
+
 def test_context_from_chunks_numbers_sources() -> None:
     blocks, cites = context_from_chunks(
         [

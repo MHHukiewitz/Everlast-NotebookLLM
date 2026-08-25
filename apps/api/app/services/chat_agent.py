@@ -610,15 +610,21 @@ def tool_prelude_events(call_id: str, skill_id: str, arguments: dict[str, Any]) 
     ]
 
 
+def _candidate_field(item: Any, key: str) -> str:
+    if isinstance(item, dict):
+        return str(item.get(key) or "")
+    return str(getattr(item, key, None) or "")
+
+
 def research_scratch(report_md: str, candidates: list[Any]) -> tuple[str, list[dict[str, Any]]]:
     blocks = []
     if report_md.strip():
         blocks.append(report_md.strip())
     citation_map: list[dict[str, Any]] = []
     for index, item in enumerate(candidates, start=1):
-        title = getattr(item, "title", None) or item.get("title") or ""
-        url = getattr(item, "url", None) or item.get("url") or ""
-        quote = getattr(item, "quote", None) or item.get("quote") or ""
+        title = _candidate_field(item, "title")
+        url = _candidate_field(item, "url")
+        quote = _candidate_field(item, "quote")
         blocks.append(f"[{index}] {title} — {url} — {quote}")
         citation_map.append({"n": index, "url": url, "title": title, "quote": quote[:280]})
     return "Recherche-Scratch:\n" + "\n\n".join(blocks), citation_map
