@@ -2,7 +2,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.modalities import image_openrouter_models, require_tts, resolve_media
+from app.services.modalities import (
+    image_openrouter_models,
+    openrouter_tts_models,
+    require_tts,
+    resolve_media,
+)
 
 
 def test_resolve_tts_local_when_host_up(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,6 +94,18 @@ def test_resolve_upgrades_flash_image_to_pro(monkeypatch: pytest.MonkeyPatch) ->
     )
     route = resolve_media("image", "openrouter", "google/gemini-2.5-flash-image")
     assert route["model"] == "google/gemini-3-pro-image"
+
+
+def test_openrouter_tts_allowlist_rewrites_missing_openai_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.modalities.settings.tts_openrouter_models", "openai/gpt-4o-mini-tts")
+    assert openrouter_tts_models() == ["google/gemini-3.1-flash-tts-preview"]
+
+
+def test_resolve_openrouter_tts_rewrites_missing_openai_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.modalities.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr("app.services.modalities.settings.tts_openrouter_models", "openai/gpt-4o-mini-tts")
+    route = resolve_media("tts", "openrouter", "openai/gpt-4o-mini-tts")
+    assert route["model"] == "google/gemini-3.1-flash-tts-preview"
 
 
 def test_require_tts_uses_notebook(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -11,6 +11,7 @@ from app.deps import owned_notebook
 from app.models import Message, Notebook
 from app.schemas import ChatIn, ChatResumeIn, MessageOut
 from app.services.chat_agent import run_chat, run_chat_resume
+from app.services.load import heavy_job
 from app.services.research import run_research_job_isolated
 from app.services.tracing import score_trace
 
@@ -54,10 +55,11 @@ async def chat(
     session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
     async def events():
-        async for payload in run_chat(session, notebook, body.content):
-            if payload.get("event") == "research_pending":
-                background_tasks.add_task(run_research_job_isolated, uuid.UUID(str(payload["job_id"])))
-            yield _sse(payload)
+        async with heavy_job():
+            async for payload in run_chat(session, notebook, body.content):
+                if payload.get("event") == "research_pending":
+                    background_tasks.add_task(run_research_job_isolated, uuid.UUID(str(payload["job_id"])))
+                yield _sse(payload)
 
     return StreamingResponse(events(), media_type="text/event-stream", headers=SSE_HEADERS)
 
@@ -69,8 +71,9 @@ async def chat_resume(
     session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
     async def events():
-        async for payload in run_chat_resume(session, notebook, body.job_id):
-            yield _sse(payload)
+        async with heavy_job():
+            async for payload in run_chat_resume(session, notebook, body.job_id):
+                yield _sse(payload)
 
     return StreamingResponse(events(), media_type="text/event-stream", headers=SSE_HEADERS)
 

@@ -8,6 +8,7 @@ import { SiteFooter } from "@/components/SiteFooter";
 import { ResizableStages } from "@/components/layout/ResizableStages";
 import { NotebookBrowser } from "@/components/notebooks/NotebookBrowser";
 import { ArtifactCard } from "@/components/studio/ArtifactCard";
+import { StudioNotifyToggle } from "@/components/studio/StudioNotifyToggle";
 import { StudioRunModal } from "@/components/studio/StudioRunModal";
 import { StudioSkillButton } from "@/components/studio/StudioSkillButton";
 import { ApiError, api, streamChat, streamChatResume, uploadFile } from "@/lib/api";
@@ -26,6 +27,14 @@ import { ACTIVE_NOTEBOOK_KEY, SOURCE_SORT_KEY } from "@/lib/notebook";
 import { panelLocks } from "@/lib/panelLocks";
 import { displayUrl, isHttpUrl, sourceFavicon } from "@/lib/source";
 import { DEFAULT_SOURCE_SORT, formatSourceSort, parseSourceSort, sortSources, type SourceSort } from "@/lib/sourceSort";
+import {
+  artifactStatusMap,
+  finishedStudioArtifacts,
+  notificationPermission,
+  notifyStudioJob,
+  requestStudioNotifyPermission,
+  studioNotifyWanted,
+} from "@/lib/studioNotify";
 import type {
   Artifact,
   AuthUser,
@@ -122,6 +131,7 @@ export default function Page() {
   const studioListRef = useRef<HTMLDivElement>(null);
   const studioSubmitLock = useRef(false);
   const studioPendingSeq = useRef(0);
+  const artifactStatusRef = useRef<Record<string, string> | null>(null);
   const chatListRef = useRef<HTMLDivElement>(null);
   const pinChatToBottom = useRef(true);
   const chatSettingsSeq = useRef(0);
@@ -174,6 +184,10 @@ export default function Page() {
     () => artifacts.some((artifact) => artifact.payload?.status === "pending"),
     [artifacts],
   );
+  const pendingSummaries = useMemo(
+    () => sources.some((source) => source.summary_status === "pending" || source.summary_status === "running"),
+    [sources],
+  );
   const locks = useMemo(
     () => panelLocks({ chatBusy, addBusy, researchBusy }),
     [chatBusy, addBusy, researchBusy],
@@ -184,6 +198,7 @@ export default function Page() {
     setSources(src);
     setMessages(msg);
     setArtifacts(art);
+    return art;
   }, []);
 
   const syncNotebook = useCallback(async (id: string) => {
@@ -260,12 +275,33 @@ export default function Page() {
   }
 
   useEffect(() => {
-    if (!notebook || !pendingMedia) return;
+    artifactStatusRef.current = null;
+  }, [notebook?.id]);
+
+  useEffect(() => {
+    if (artifactStatusRef.current === null) {
+      artifactStatusRef.current = artifactStatusMap(artifacts);
+      return;
+    }
+    const finished = finishedStudioArtifacts(artifactStatusRef.current, artifacts);
+    artifactStatusRef.current = artifactStatusMap(artifacts);
+    for (const item of finished) {
+      const failed = item.payload?.status === "error";
+      notifyStudioJob({
+        title: failed ? t.notifyStudioFailed(item.title) : t.notifyStudioReady(item.title),
+        body: failed ? item.payload?.progress || t.notifyStudioBodyFailed : t.notifyStudioBodyReady,
+        tag: `studio-${item.id}`,
+      });
+    }
+  }, [artifacts]);
+
+  useEffect(() => {
+    if (!notebook || (!pendingMedia && !pendingSummaries)) return;
     const timer = window.setInterval(() => {
       refresh(notebook.id);
-    }, 2500);
+    }, pendingMedia ? 2500 : 4000);
     return () => window.clearInterval(timer);
-  }, [notebook, pendingMedia, refresh]);
+  }, [notebook, pendingMedia, pendingSummaries, refresh]);
 
   async function onAddUrl() {
     if (!notebook) return;
@@ -692,6 +728,9 @@ export default function Page() {
       setStudioError(t.studioNoSources);
       return;
     }
+    if (studioNotifyWanted() && notificationPermission() === "default") {
+      await requestStudioNotifyPermission();
+    }
     studioSubmitLock.current = true;
     const skill = studioSkill;
     const notebookId = notebook.id;
@@ -722,8 +761,22 @@ export default function Page() {
       return null;
     });
     if (result) {
-      await refresh(notebookId);
+      const art = await refresh(notebookId);
       await syncNotebook(notebookId);
+      const created = art.find((item) => item.id === result.artifact_id);
+      if (created && (created.payload?.status || "ready") !== "pending") {
+        notifyStudioJob({
+          title: t.notifyStudioReady(created.title),
+          body: t.notifyStudioBodyReady,
+          tag: `studio-${created.id}`,
+        });
+      }
+    } else {
+      notifyStudioJob({
+        title: t.notifyStudioFailed(skill.title),
+        body: t.notifyStudioBodyFailed,
+        tag: `studio-${pendingId}`,
+      });
     }
     setPendingStudio((list) => list.filter((item) => item.id !== pendingId));
   }
@@ -1423,6 +1476,10 @@ export default function Page() {
               <input type="checkbox" checked={orOk} onChange={(e) => setOrOk(e.target.checked)} />
               {t.acceptOr}
             </label>
+            <div>
+              <p className="mb-1 font-medium">{t.notifyStudio}</p>
+              <StudioNotifyToggle hint={t.notifyStudioHint} />
+            </div>
             <button className="btn-primary" onClick={saveSettings}>
               {t.save}
             </button>

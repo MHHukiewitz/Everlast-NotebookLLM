@@ -11,6 +11,7 @@ from app.models import Artifact, Notebook, Source, User
 from app.schemas import ArtifactOut, NoteIn, SkillCard, SkillRunIn, SourceOut
 from app.services.autoname import maybe_autoname
 from app.services.ingest import ingest_text
+from app.services.load import heavy_job
 from app.services.skills import STUDIO_CATALOG, run_skill
 from app.services.studio.export import artifact_markdown, export_artifact
 from app.services.studio.media import media_file, remove_artifact_files, synthesize_media_isolated
@@ -154,7 +155,8 @@ async def run(
     locked = {card.id for card in STUDIO_CATALOG if card.status == "locked"}
     if skill_id in locked:
         raise HTTPException(400, "Diese Studio-Funktion ist gesperrt.")
-    result = await run_skill(session, notebook, skill_id, body.args)
+    async with heavy_job():
+        result = await run_skill(session, notebook, skill_id, body.args)
     if skill_id in {"studio.audio", "studio.video"} and result.get("artifact_id"):
         artifact = await session.get(Artifact, uuid.UUID(result["artifact_id"]))
         if artifact and (artifact.payload or {}).get("status") == "pending":

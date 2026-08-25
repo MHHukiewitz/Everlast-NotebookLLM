@@ -14,7 +14,14 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Artifact, Notebook
-from app.services.modalities import image_ready, require_tts, resolve_media, tts_language_code
+from app.services.modalities import (
+    image_ready,
+    normalize_openrouter_tts,
+    require_tts,
+    resolve_media,
+    tts_language_code,
+)
+from app.services.load import heavy_job
 from app.services.piper_tts import synthesize_wav
 from app.services.pdf import AI_MARK
 
@@ -138,6 +145,53 @@ OPENAI_TO_PIPER = {
     "shimmer": "de_DE-kerstin-low",
     "coral": "de_DE-kerstin-low",
 }
+GEMINI_TTS_VOICES = frozenset(
+    {
+        "Achernar",
+        "Achird",
+        "Algenib",
+        "Algieba",
+        "Alnilam",
+        "Aoede",
+        "Autonoe",
+        "Callirrhoe",
+        "Charon",
+        "Despina",
+        "Enceladus",
+        "Erinome",
+        "Fenrir",
+        "Gacrux",
+        "Iapetus",
+        "Kore",
+        "Laomedeia",
+        "Leda",
+        "Orus",
+        "Pulcherrima",
+        "Puck",
+        "Rasalgethi",
+        "Sadachbia",
+        "Sadaltager",
+        "Schedar",
+        "Sulafat",
+        "Umbriel",
+        "Vindemiatrix",
+        "Zephyr",
+        "Zubenelgenubi",
+    }
+)
+OPENAI_TO_GEMINI = {
+    "alloy": "Orus",
+    "ash": "Puck",
+    "echo": "Orus",
+    "onyx": "Charon",
+    "nova": "Zephyr",
+    "shimmer": "Kore",
+    "coral": "Sulafat",
+    "fable": "Puck",
+    "verse": "Iapetus",
+    "marin": "Aoede",
+    "cedar": "Charon",
+}
 
 
 def media_progress(kind: str, index: int, total: int, step: str) -> str:
@@ -169,14 +223,36 @@ def openai_tts_voice(voice: str) -> str:
     return settings.tts_voice_a_en if settings.tts_voice_a_en in OPENAI_TTS_VOICES else "alloy"
 
 
+def gemini_tts_voice(voice: str) -> str:
+    if voice in GEMINI_TTS_VOICES:
+        return voice
+    mapped = OPENAI_TO_GEMINI.get(voice)
+    if mapped:
+        return mapped
+    if "kerstin" in voice:
+        return "Zephyr"
+    return "Orus"
+
+
+def uses_gemini_tts(model: str) -> bool:
+    return "gemini" in (model or "") or (model or "").startswith("google/")
+
+
 def speech_payload(route: dict[str, Any], text: str, voice: str, language: str | None = "de") -> dict[str, Any]:
+    model = route["model"]
+    if route.get("provider") == "openrouter":
+        model = normalize_openrouter_tts(model)
     payload = {
-        "model": route["model"],
+        "model": model,
         "input": text,
         "voice": voice,
         "response_format": "mp3",
     }
     if route.get("provider") != "openrouter":
+        return payload
+    if uses_gemini_tts(model):
+        payload["voice"] = gemini_tts_voice(voice)
+        payload["response_format"] = "pcm"
         return payload
     payload["voice"] = openai_tts_voice(voice)
     payload["provider"] = {"options": {"openai": {"instructions": speech_style(language)}}}
@@ -191,6 +267,51 @@ def speech_request(
         dict(route.get("headers") or {}),
         speech_payload(route, text, voice, language),
     )
+
+
+def pcm_params(content_type: str) -> tuple[int, int]:
+    rate = 24000
+    channels = 1
+    for part in (content_type or "").split(";"):
+        item = part.strip().lower()
+        if item.startswith("rate=") and item[5:].isdigit():
+            rate = int(item[5:])
+        if item.startswith("channels=") and item[9:].isdigit():
+            channels = int(item[9:])
+    return rate, channels
+
+
+def pcm_to_mp3(pcm: bytes, rate: int = 24000, channels: int = 1) -> bytes:
+    if not pcm:
+        raise ValueError("Das Sprachmodell lieferte keine Audiodatei.")
+    work = Path(tempfile.mkdtemp(prefix="tts-pcm-"))
+    raw = work / "speech.pcm"
+    dest = work / "speech.mp3"
+    raw.write_bytes(pcm)
+    _run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "s16le",
+            "-ar",
+            str(rate),
+            "-ac",
+            str(channels),
+            "-i",
+            str(raw),
+            "-af",
+            f"apad=pad_dur={CLIP_PAD_SEC}",
+            "-q:a",
+            "9",
+            "-acodec",
+            "libmp3lame",
+            str(dest),
+        ]
+    )
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise ValueError("ffmpeg konnte die Sprachdatei nicht schreiben.")
+    return dest.read_bytes()
 
 
 def wav_to_mp3(wav: Path) -> bytes:
@@ -235,6 +356,10 @@ def speak(notebook: Notebook, text: str, voice: str, language: str | None = "de"
         raise ValueError(f"Sprachmodell antwortete mit {response.status_code}.{suffix}")
     if not response.content:
         raise ValueError("Das Sprachmodell lieferte keine Audiodatei.")
+    content_type = (response.headers.get("content-type") or "").lower()
+    if payload.get("response_format") == "pcm" or content_type.startswith("audio/pcm"):
+        rate, channels = pcm_params(content_type)
+        return pcm_to_mp3(response.content, rate, channels)
     return response.content
 
 
@@ -500,10 +625,11 @@ async def mark_media_error(artifact_id: uuid.UUID, message: str) -> None:
 
 
 async def synthesize_media_isolated(artifact_id: uuid.UUID) -> None:
-    async with SessionLocal() as session:
-        try:
-            await synthesize_media(session, artifact_id)
-            return
-        except Exception as exc:
-            message = str(exc)
-    await mark_media_error(artifact_id, message)
+    async with heavy_job():
+        async with SessionLocal() as session:
+            try:
+                await synthesize_media(session, artifact_id)
+                return
+            except Exception as exc:
+                message = str(exc)
+        await mark_media_error(artifact_id, message)

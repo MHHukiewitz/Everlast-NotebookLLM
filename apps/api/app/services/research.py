@@ -24,6 +24,7 @@ from app.services.ingest import (
     ground_summary,
     unwrap_markdown_fence,
 )
+from app.services.load import heavy_job
 from app.services.net import host_open
 from app.services.search_query import rewrite_retry_web_query
 from app.services.tracing import pack_prompt, record_generation, start_trace
@@ -373,18 +374,20 @@ async def run_research_job(session: AsyncSession, job_id: uuid.UUID) -> None:
 
 
 async def run_research_job_isolated(job_id: uuid.UUID) -> None:
-    async with SessionLocal() as session:
-        await run_research_job(session, job_id)
+    async with heavy_job():
+        async with SessionLocal() as session:
+            await run_research_job(session, job_id)
 
 
 async def import_research_isolated(
     job_id: uuid.UUID, citation_ids: list[uuid.UUID], import_report: bool
 ) -> None:
-    async with SessionLocal() as session:
-        job = await session.get(ResearchJob, job_id)
-        if job is None:
-            return
-        await import_research(session, job, citation_ids, import_report)
+    async with heavy_job():
+        async with SessionLocal() as session:
+            job = await session.get(ResearchJob, job_id)
+            if job is None:
+                return
+            await import_research(session, job, citation_ids, import_report)
 
 
 def _fetch_citation_page(url: str, fallback: str) -> tuple[str, str | None]:

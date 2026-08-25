@@ -5,11 +5,11 @@ import pytest
 from app.services.modalities import require_tts, tts_language_code
 from app.services.studio.audio import SYSTEM_BRIEFING, SYSTEM_EXPLAINER, _language_label
 from app.services.studio.media import (
-    GERMAN_SPEECH_STYLE,
     OPENAI_TO_PIPER,
-    OPENAI_TTS_VOICES,
+    gemini_tts_voice,
     media_progress,
     openai_tts_voice,
+    pcm_params,
     speech_payload,
     speech_request,
     speech_style,
@@ -79,14 +79,15 @@ def test_german_local_kokoro_without_piper_raises(monkeypatch: pytest.MonkeyPatc
         require_tts(notebook, "de")  # type: ignore[arg-type]
 
 
-def test_openrouter_german_payload_sets_style() -> None:
+def test_openrouter_rewrites_missing_openai_tts_to_gemini() -> None:
     route = {"provider": "openrouter", "model": "openai/gpt-4o-mini-tts"}
     payload = speech_payload(route, "Guten Tag. Dies ist eine kurze Prüfung.", "alloy", "de")
-    assert payload["model"] == "openai/gpt-4o-mini-tts"
-    assert payload["voice"] == "alloy"
+    assert payload["model"] == "google/gemini-3.1-flash-tts-preview"
+    assert payload["voice"] == "Orus"
+    assert payload["response_format"] == "pcm"
     assert payload["input"] == "Guten Tag. Dies ist eine kurze Prüfung."
     assert "instructions" not in payload
-    assert payload["provider"]["options"]["openai"]["instructions"] == GERMAN_SPEECH_STYLE
+    assert "provider" not in payload
     assert "Deutsch" in speech_style("de")
 
 
@@ -103,14 +104,22 @@ def test_openrouter_german_speech_request_rejects_piper_voice(monkeypatch: pytes
     assert voice == "de_DE-thorsten-medium"
     url, _headers, body = speech_request(route, "Guten Tag. Dies ist eine kurze Prüfung.", voice, "de")
     assert url == "https://openrouter.ai/api/v1/audio/speech"
-    assert body["voice"] == "alloy"
-    assert body["voice"] in OPENAI_TTS_VOICES
+    assert body["model"] == "google/gemini-3.1-flash-tts-preview"
+    assert body["voice"] == "Orus"
     assert "de_DE" not in body["voice"]
     assert "instructions" not in body
-    assert body["response_format"] == "mp3"
-    assert body["provider"]["options"]["openai"]["instructions"] == GERMAN_SPEECH_STYLE
+    assert "provider" not in body
+    assert body["response_format"] == "pcm"
+    assert gemini_tts_voice("de_DE-thorsten-medium") == "Orus"
+    assert gemini_tts_voice("nova") == "Zephyr"
     assert openai_tts_voice("de_DE-thorsten-medium") == "alloy"
     assert voice_for("A", "de", provider="openrouter") == "alloy"
+
+
+def test_pcm_params_read_rate_and_channels() -> None:
+    assert pcm_params("audio/pcm;rate=24000;channels=1") == (24000, 1)
+    assert pcm_params("audio/pcm") == (24000, 1)
+    assert pcm_params("") == (24000, 1)
 
 
 def test_media_progress_names_scene_and_step() -> None:

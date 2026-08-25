@@ -12,6 +12,7 @@ from app.models import AuditEvent, Citation, Notebook, Source
 from app.schemas import AddTextIn, AddUrlIn, SelectSourceIn, SourceDetail, SourceOut
 from app.services.autoname import maybe_autoname
 from app.services.ingest import (
+    claim_source_summary,
     extract_upload_text,
     finalize_source,
     ingest_text,
@@ -48,9 +49,7 @@ async def get_source(
     cites = (
         await session.execute(select(Citation).where(Citation.source_id == source.id).order_by(Citation.id))
     ).scalars()
-    if source.summary_status == "pending":
-        source.summary_status = "running"
-        await session.commit()
+    if await claim_source_summary(session, source.id):
         background_tasks.add_task(refresh_model_summary, source.id)
     return SourceDetail.model_validate(source).model_copy(update={"citations": list(cites)})
 

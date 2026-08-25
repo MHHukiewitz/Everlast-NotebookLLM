@@ -14,6 +14,7 @@ from app.services.studio.media import (
     hold_durations,
     join_video,
     media_duration,
+    pcm_to_mp3,
     render_style_frame,
     wav_to_mp3,
     write_frame,
@@ -57,6 +58,30 @@ def _tone_mp3(path: Path, seconds: float, freq: int) -> None:
         check=True,
         capture_output=True,
     )
+
+
+def test_pcm_to_mp3_keeps_source_duration_plus_clip_pad(tmp_path: Path) -> None:
+    pcm = tmp_path / "speech.pcm"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=24000:duration=1.0",
+            "-f",
+            "s16le",
+            "-ac",
+            "1",
+            str(pcm),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    dest = tmp_path / "speech.mp3"
+    dest.write_bytes(pcm_to_mp3(pcm.read_bytes(), 24000, 1))
+    assert media_duration(dest) + 0.05 >= 1.0 + CLIP_PAD_SEC
 
 
 def test_wav_to_mp3_keeps_source_duration_plus_clip_pad(tmp_path: Path) -> None:

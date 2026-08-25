@@ -1,5 +1,6 @@
 "use client";
 
+import { StudioNotifyToggle } from "@/components/studio/StudioNotifyToggle";
 import { t } from "@/lib/i18n";
 import type { Skill, Source } from "@/lib/types";
 
@@ -167,6 +168,7 @@ export function StudioRunModal({
             />
           </label>
           {error && <p className="text-xs text-red-600">{error}</p>}
+          <StudioNotifyToggle hint={t.notifyStudioHint} />
           <button className="btn-primary w-full" disabled={busy} onClick={onCreate}>
             {busy ? t.generating : t.mediaCreate}
           </button>

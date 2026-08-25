@@ -150,4 +150,12 @@ export const t = {
   impressum: "Impressum",
   privacy: "Datenschutz",
   deleteAccount: "Konto löschen",
+  notifyStudio: "Studio-Benachrichtigungen",
+  notifyStudioHint: "Der Browser fragt zuerst nach der Erlaubnis. Wir benachrichtigen dich auf diesem Gerät, wenn eine Studio-Ausgabe fertig ist.",
+  notifyStudioAsk: "Mich benachrichtigen, wenn die Ausgabe fertig ist.",
+  notifyStudioDenied: "Der Browser hat Benachrichtigungen blockiert. Ändere das in den Browser-Einstellungen.",
+  notifyStudioReady: (title: string) => `${title} ist fertig.`,
+  notifyStudioFailed: (title: string) => `${title} ist fehlgeschlagen.`,
+  notifyStudioBodyReady: "Die Studio-Ausgabe ist bereit.",
+  notifyStudioBodyFailed: "Die Erzeugung ist fehlgeschlagen.",
 };

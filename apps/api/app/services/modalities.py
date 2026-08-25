@@ -10,6 +10,11 @@ from app.services.piper_tts import piper_ready
 Kind = Literal["tts", "image"]
 ENGLISH_ONLY_TTS_MODELS = frozenset({"kokoro"})
 LOCAL_GERMAN_TTS = "piper"
+DEFAULT_TTS_OPENROUTER = "google/gemini-3.1-flash-tts-preview"
+RETIRED_OPENROUTER_TTS = {
+    "openai/gpt-4o-mini-tts": DEFAULT_TTS_OPENROUTER,
+    "openai/gpt-4o-mini-tts-2025-12-15": DEFAULT_TTS_OPENROUTER,
+}
 WEAK_IMAGE_MODELS = frozenset(
     {
         "google/gemini-2.5-flash-image",
@@ -22,6 +27,11 @@ DEFAULT_IMAGE_OPENROUTER = [
     "black-forest-labs/flux.2-pro",
     "bytedance-seed/seedream-5-0-pro",
 ]
+_TTS_LABELS = {
+    DEFAULT_TTS_OPENROUTER: "Gemini 3.1 Flash TTS",
+    "openai/gpt-4o-mini-tts": "Gemini 3.1 Flash TTS",
+    "openai/gpt-4o-mini-tts-2025-12-15": "Gemini 3.1 Flash TTS",
+}
 _IMAGE_LABELS = {
     "google/gemini-3-pro-image": "Gemini 3 Pro Image",
     "google/gemini-2.5-flash-image": "Gemini 2.5 Flash Image",
@@ -37,7 +47,20 @@ def _csv(value: str) -> list[str]:
 
 
 def _label(model_id: str) -> str:
-    return _IMAGE_LABELS.get(model_id, model_id.split("/")[-1])
+    return _TTS_LABELS.get(model_id) or _IMAGE_LABELS.get(model_id, model_id.split("/")[-1])
+
+
+def normalize_openrouter_tts(model_id: str) -> str:
+    return RETIRED_OPENROUTER_TTS.get(model_id, model_id)
+
+
+def openrouter_tts_models() -> list[str]:
+    configured = [normalize_openrouter_tts(item) for item in _csv(settings.tts_openrouter_models)]
+    seen: list[str] = []
+    for item in configured:
+        if item not in seen:
+            seen.append(item)
+    return seen or [DEFAULT_TTS_OPENROUTER]
 
 
 def image_openrouter_models() -> list[str]:
@@ -103,7 +126,7 @@ def list_modalities() -> ModalitiesOut:
             label="OpenRouter",
             available=or_up,
             notice=or_notice,
-            models=_lane_models(_csv(settings.tts_openrouter_models), "openrouter"),
+            models=_lane_models(openrouter_tts_models(), "openrouter"),
         ),
     ]
     image = [
@@ -149,7 +172,7 @@ def _allowlist(kind: Kind, provider: str) -> list[str]:
     if kind == "tts" and provider == "eu":
         return _csv(settings.tts_eu_models)
     if kind == "tts" and provider == "openrouter":
-        return _csv(settings.tts_openrouter_models)
+        return openrouter_tts_models()
     if kind == "image" and provider == "local":
         return _csv(settings.image_local_models)
     if kind == "image" and provider == "eu":
@@ -162,6 +185,8 @@ def _allowlist(kind: Kind, provider: str) -> list[str]:
 def resolve_media(kind: Kind, provider: str, model_id: str) -> dict[str, Any]:
     allow = _allowlist(kind, provider)
     chosen = model_id or (allow[0] if allow else "")
+    if kind == "tts" and provider == "openrouter":
+        chosen = normalize_openrouter_tts(chosen)
     if kind == "image" and provider == "openrouter" and chosen in WEAK_IMAGE_MODELS:
         upgrade = next((item for item in DEFAULT_IMAGE_OPENROUTER if item in allow), "")
         if upgrade:

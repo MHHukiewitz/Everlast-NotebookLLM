@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     tts_local_base_url: str = "http://127.0.0.1:8880"
     tts_local_models: str = "piper,kokoro"
     tts_eu_models: str = ""
-    tts_openrouter_models: str = "openai/gpt-4o-mini-tts"
+    tts_openrouter_models: str = "google/gemini-3.1-flash-tts-preview"
     tts_voice_a: str = "de_DE-thorsten-medium"
     tts_voice_b: str = "de_DE-kerstin-low"
     tts_voice_a_en: str = "alloy"

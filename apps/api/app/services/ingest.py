@@ -15,11 +15,12 @@ import trafilatura
 from bs4 import BeautifulSoup
 from docx import Document
 from pypdf import PdfReader
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
+from app.services.load import system_is_busy
 from app.models import Chunk, Citation, Notebook, Source
 from app.services.connectors import router
 from app.services.embeddings import embed_texts
@@ -28,6 +29,22 @@ from app.services.tracing import pack_prompt, record_generation, start_trace
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _CITED_QUOTE = re.compile(r"\[(\d+)\]\s*[\"«„“](.+?)[\"»“”]", re.DOTALL)
+CLAIM_PENDING_SUMMARY = text(
+    """
+    UPDATE sources
+    SET summary_status = 'running'
+    WHERE id = (
+        SELECT id FROM sources
+        WHERE status = 'ready'
+          AND summary_status = 'pending'
+          AND content_md <> ''
+        ORDER BY created_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id
+    """
+)
 _BARE_URL = re.compile(r"https?://[^\s)>\]]+")
 _OUTER_FENCE = re.compile(r"^```(?:[a-zA-Z0-9_-]*)?\s*\n([\s\S]*?)\n```(?:\s*\n([\s\S]*))?$")
 _IMAGE_SUFFIX = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -380,6 +397,43 @@ async def refresh_model_summary(source_id: uuid.UUID) -> None:
         source.summary_md = summary
         source.summary_status = "ready"
         await session.commit()
+
+
+async def claim_source_summary(session: AsyncSession, source_id: uuid.UUID) -> bool:
+    source = await session.get(Source, source_id)
+    if source is None or source.summary_status != "pending" or not source.content_md:
+        return False
+    source.summary_status = "running"
+    await session.commit()
+    return True
+
+
+async def claim_pending_summary() -> uuid.UUID | None:
+    async with SessionLocal() as session:
+        result = await session.execute(CLAIM_PENDING_SUMMARY)
+        source_id = result.scalar_one_or_none()
+        await session.commit()
+        return source_id
+
+
+async def next_idle_summary() -> uuid.UUID | None:
+    if system_is_busy():
+        return None
+    return await claim_pending_summary()
+
+
+async def process_one_idle_summary() -> bool:
+    source_id = await next_idle_summary()
+    if source_id is None:
+        return False
+    await refresh_model_summary(source_id)
+    return True
+
+
+async def run_idle_summaries(stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        await process_one_idle_summary()
+        await asyncio.sleep(2)
 
 
 async def finalize_source(

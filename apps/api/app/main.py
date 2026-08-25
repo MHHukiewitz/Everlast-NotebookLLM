@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -9,7 +10,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.config import settings
 from app.db import Base, SessionLocal, engine
 from app.routers import auth, chat, compliance, eval as eval_router, notebooks, research, skills, sources
-from app.services.ingest import rebuild_embeddings
+from app.services.ingest import rebuild_embeddings, run_idle_summaries
 from app.services.tenancy import seed_demo_user
 
 
@@ -24,7 +25,13 @@ async def lifespan(_: FastAPI):
         await conn.execute(text("ALTER TABLE sources ADD COLUMN IF NOT EXISTS favicon_url TEXT"))
         await conn.execute(text("ALTER TABLE sources ADD COLUMN IF NOT EXISTS summary_status VARCHAR(16) DEFAULT 'pending'"))
         await conn.execute(
-            text("UPDATE sources SET summary_status = 'ready' WHERE summary_md <> '' AND summary_status = 'pending'")
+            text(
+                "UPDATE sources SET summary_status = 'pending' "
+                "WHERE status = 'ready' AND content_md <> '' "
+                "AND summary_status = 'ready' "
+                "AND summary_md NOT LIKE '%Dieser Bericht ist KI-generiert%' "
+                "AND length(summary_md) < 1200"
+            )
         )
         await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS raw_output TEXT DEFAULT ''"))
         await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS reasoning JSONB DEFAULT '[]'::jsonb"))
@@ -47,7 +54,11 @@ async def lifespan(_: FastAPI):
         await seed_demo_user(session)
         if settings.embedding_backend == "ollama":
             await rebuild_embeddings(session)
+    stop_summaries = asyncio.Event()
+    summary_worker = asyncio.create_task(run_idle_summaries(stop_summaries))
     yield
+    stop_summaries.set()
+    await summary_worker
     await engine.dispose()
 
 
