@@ -14,7 +14,11 @@ export default function DatenschutzPage() {
 
         <h2 className="mt-6 font-medium">Verantwortliche Stelle</h2>
         <p>
-          {operator.name}, {operator.address}, {operator.email}
+          {operator.name}
+          <br />
+          {operator.address}
+          <br />
+          E-Mail: {operator.email}
         </p>
 
         <h2 className="mt-6 font-medium">Welche Daten wir verarbeiten</h2>
@@ -28,8 +32,8 @@ export default function DatenschutzPage() {
         <h2 className="mt-6 font-medium">Zweck und Rechtsgrundlage</h2>
         <p>
           Wir verarbeiten die Daten, damit du das Notebook nutzen kannst. Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO
-          (Vertrag bzw. vorvertragliche Nutzung). Die Registrierung ist auf eine E-Mail-Liste beschränkt
-          (REGISTER_ALLOWLIST). E-Mail-Adressen werden in dieser Demo nicht bestätigt.
+          (Vertrag bzw. vorvertragliche Nutzung). Die Registrierung ist auf eine E-Mail-Liste beschränkt.
+          E-Mail-Adressen werden in dieser Demo nicht bestätigt.
         </p>
 
         <h2 className="mt-6 font-medium">Cookies</h2>
@@ -49,7 +53,7 @@ export default function DatenschutzPage() {
 
         <h2 className="mt-6 font-medium">Speicherdauer</h2>
         <p>
-          Konten und Notebooks bleiben bis zur Löschung. Recherche-Zwischendaten: 30 Tage (RESEARCH_SCRATCH_DAYS).
+          Konten und Notebooks bleiben bis zur Löschung. Recherche-Zwischendaten: 30 Tage.
         </p>
 
         <h2 className="mt-6 font-medium">Rechte</h2>

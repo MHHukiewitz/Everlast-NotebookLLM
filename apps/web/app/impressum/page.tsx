@@ -18,10 +18,6 @@ export default function ImpressumPage() {
           <br />
           E-Mail: {operator.email}
         </p>
-        <p className="mt-4 text-neutral-600">
-          Trage Name, Anschrift und E-Mail vor dem öffentlichen Betrieb in die Umgebungsvariablen
-          NEXT_PUBLIC_OPERATOR_NAME, NEXT_PUBLIC_OPERATOR_ADDRESS und NEXT_PUBLIC_OPERATOR_EMAIL ein.
-        </p>
       </main>
       <SiteFooter extra={t.footer} />
     </div>

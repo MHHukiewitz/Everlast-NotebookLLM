@@ -16,7 +16,6 @@ cp .env.example .env
 # set SESSION_SECRET, DEMO_EMAIL, DEMO_PASSWORD
 # optional: REGISTER_ALLOWLIST=anna@everlast.de
 # optional: OPENROUTER_API_KEY
-# optional: NEXT_PUBLIC_OPERATOR_NAME, NEXT_PUBLIC_OPERATOR_ADDRESS, NEXT_PUBLIC_OPERATOR_EMAIL
 docker compose -f infra/docker-compose.yml up --build
 ```
 
