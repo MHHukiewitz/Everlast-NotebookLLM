@@ -21,6 +21,7 @@ from app.services.chat_agent import (
     parse_tool_args,
     research_query,
     research_scratch,
+    should_offer_web_search,
     retrieve_step_detail,
     run_chat,
     run_chat_resume,
@@ -41,6 +42,9 @@ def test_system_uses_exact_no_answer() -> None:
     assert "Beantworte zuerst die Frage" in SYSTEM
     assert "Verbinde Fakten aus mehreren Quellen" in SYSTEM
     assert "notes.create" not in skills.CHAT_TOOLS
+    assert "research.fast" in skills.CHAT_TOOLS
+    assert "research_fast" in SYSTEM
+    assert "Warte nicht auf Wörter wie recherchiere" in SYSTEM
     assert "Ollama" in SYSTEM
     assert "BM25" in SYSTEM
     assert "Hybrid-Search" in SYSTEM
@@ -55,6 +59,13 @@ def test_research_query_detects_german_and_english() -> None:
     assert research_query("Bitte research the company history")
     assert research_query("suche im web nach Everlast")
     assert not research_query("Was steht in den Quellen zu Everlast?")
+
+
+def test_should_offer_web_search_when_sources_do_not_answer() -> None:
+    assert should_offer_web_search("Wer sind Mitbewerber von Everlast?", NO_ANSWER)
+    assert should_offer_web_search("Wer sind Mitbewerber von Everlast?", "")
+    assert not should_offer_web_search("Hallo", NO_ANSWER)
+    assert not should_offer_web_search("Was steht in den Quellen?", "Everlast berät zu KI. [1]")
 
 
 def test_smalltalk_skips_research() -> None:
@@ -113,6 +124,8 @@ def test_chat_refreshes_after_source_change() -> None:
     src = inspect.getsource(run_chat)
     assert src.count("retrieve_chunks") >= 2
     assert "context_from_chunks" in src
+    assert "should_offer_web_search" in src
+    assert "thin_sources" not in src
 
 
 def test_resume_requires_report() -> None:

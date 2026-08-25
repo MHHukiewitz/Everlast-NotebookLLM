@@ -367,6 +367,16 @@ export function reasoningLabel(item: unknown): string {
   return "";
 }
 
+export function toolArgumentPreview(raw: string): string {
+  const text = (raw || "").trim();
+  if (!text) return "";
+  const match = text.match(/"(?:query|url|title|text)"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (match) {
+    return match[1].replace(/\\"/g, '"');
+  }
+  return text.replace(/\s+/g, " ").slice(0, 140);
+}
+
 export function toolCallsFromMessage(raw: unknown[] | undefined): ToolCallView[] {
   return (raw || []).map((item, index) => {
     const rec = (item || {}) as Record<string, unknown>;

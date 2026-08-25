@@ -15,13 +15,19 @@ from app.models import Citation, Message, Notebook, ResearchJob, Source
 from app.services.connectors import router
 from app.services.research import searx_reachable
 from app.services.retrieve import notebook_search, overlap_score, search_is_weak
-from app.services.search_query import rewrite_search_query
+from app.services.search_query import rewrite_search_query, rewrite_web_query
 from app.services.skills import CHAT_TOOLS, REGISTRY, resolve_tool_name, run_skill, tool_schema
 from app.services.tracing import pack_prompt, record_generation, start_trace
 
 NO_ANSWER = "Die Quellen enthalten dazu keine klare Antwort."
 NO_SOURCES = "Füge Quellen hinzu oder stelle eine Frage."
 RESEARCH_WAIT = "Ich suche im Web nach weiteren Fakten…"
+DECIDE_WEB = (
+    "Die ausgewählten Quellen reichen für diese Frage nicht. "
+    "Wenn Webfakten helfen, rufe research_fast auf. "
+    "Schreibe in query eine kurze Suchmaschinen-Anfrage. "
+    f"Wenn eine Websuche nicht hilft, antworte genau mit: {NO_ANSWER}"
+)
 SEARX_DOWN = "SearXNG ist nicht erreichbar. Starte den SearXNG-Container."
 TOOL_SKIPPED = "Nicht ausgeführt"
 MAX_TOOL_ROUNDS = 4
@@ -32,9 +38,11 @@ Antworte auf Deutsch in normaler Sprache.
 Beantworte zuerst die Frage. Schreibe nur wenige Sätze.
 Schreibe keine JSON-Werkzeugaufrufe in die Antwort.
 Lege keine Notiz an, um die Frage zu beantworten.
-Für Fakten nutze nur die ausgewählten Quellen im Kontext.
+Für Fakten nutze zuerst die ausgewählten Quellen im Kontext.
 Wenn der Quellenkontext relevante Fakten zur Frage enthält, musst du antworten. Verbinde Fakten aus mehreren Quellen. Nutze dann nicht: {NO_ANSWER}
-Wenn der Quellenkontext keine relevanten Fakten zur Frage enthält, antworte genau mit: {NO_ANSWER}
+Wenn der Quellenkontext die Frage nicht trägt und du Webfakten brauchst, rufe research_fast auf. Warte nicht auf Wörter wie recherchiere.
+Schreibe in query eine kurze Suchmaschinen-Anfrage mit Namen, Ort und Branche.
+Wenn weder Quellen noch eine Websuche helfen, antworte genau mit: {NO_ANSWER}
 Übernimm Werkzeug- und Methodennamen aus dem Kontext wörtlich: Ollama, BM25, Hybrid-Search, Langfuse.
 Erfinde keine Fakten, Zahlen, Namen oder Daten.
 Hänge Zitate in der Form [n] an Sätze an, wenn du eine Faktantwort gibst. n ist die Nummer im Quellenkontext.
@@ -278,6 +286,13 @@ def research_query(text: str) -> str:
 
 def is_smalltalk(text: str) -> bool:
     return bool(_SMALLTALK.match(text.strip()))
+
+
+def should_offer_web_search(user_text: str, assistant_text: str) -> bool:
+    if is_smalltalk(user_text):
+        return False
+    visible = (assistant_text or "").strip()
+    return not visible or visible == NO_ANSWER
 
 
 def json_object_complete(text: str) -> bool:
@@ -965,38 +980,37 @@ async def run_chat(
                 )
                 record_step(reasoning, retrieve)
                 yield retrieve
-            retry_messages = [item for item in messages if item.get("role") == "system"]
-            retry_messages.append({"role": "user", "content": user_text})
-            retry_executed: list[dict[str, Any]] = []
-            assistant_text = ""
-            async for event in _stream_pass(session, notebook, retry_messages, None, retry_executed):
-                if event.get("event") == "token":
-                    piece = str(event.get("text") or "")
-                    assistant_text += piece
-                    raw_output += piece
-                record_step(reasoning, event)
-                yield event
-            assistant_text, _leaks = extract_leaked_tools(assistant_text)
 
-    if tools_enabled and not pending_job_id:
-        visible = assistant_text.strip()
-        thin = (not visible or visible == NO_ANSWER) and not is_smalltalk(user_text) and not chunks
-        if thin:
-            async for event in _research_turn(
-                session,
-                notebook,
-                user_text,
-                model_label,
-                started,
-                pack_prompt(messages),
-                "thin_sources",
-                prior_text=assistant_text,
-                prior_tools=tool_calls,
-                prior_reasoning=reasoning,
-                trace_id=trace_id,
-            ):
-                yield event
-            return
+    if tools_enabled and not pending_job_id and should_offer_web_search(user_text, assistant_text):
+        decide = step_event("analyze", "Weitere Infos prüfen", "Quellen reichen nicht")
+        record_step(reasoning, decide)
+        yield decide
+        decide_system = join_system(messages[0]["content"] if messages else SYSTEM, DECIDE_WEB)
+        decide_messages = [
+            {"role": "system", "content": decide_system},
+            {"role": "user", "content": user_text},
+        ]
+        decide_executed: list[dict[str, Any]] = []
+        async for event in _stream_pass(
+            session, notebook, decide_messages, _tools_for_prompt(), decide_executed
+        ):
+            if event.get("event") == "token" and str(event.get("text") or "").strip() == NO_ANSWER:
+                record_step(reasoning, event)
+                continue
+            if event.get("event") == "token":
+                piece = str(event.get("text") or "")
+                assistant_text += piece
+                raw_output += piece
+            record_step(reasoning, event)
+            yield event
+        for record in decide_executed:
+            tool_calls.append(record)
+            if record.get("skipped"):
+                continue
+            if record["skill_id"].startswith("research."):
+                pending_job_id = str(record["result"]["job_id"])
+                pending_query = str(record["result"].get("query") or record["arguments"].get("query") or user_text)
+        assistant_text, _leaks = extract_leaked_tools(assistant_text)
 
     if pending_job_id:
         wait_text = assistant_text.strip() or RESEARCH_WAIT
@@ -1112,10 +1126,18 @@ async def _research_turn(
 
     tool_calls = list(prior_tools or [])
     reasoning = list(prior_reasoning or [])
-    research = step_event("research", "Websuche starten", query[:80])
+    plan_id = new_step_id()
+    plan = step_event("research", "Suchanfrage schreiben", status="running", step_id=plan_id)
+    record_step(reasoning, plan)
+    yield plan
+    steered = await rewrite_web_query(query)
+    plan_done = step_event("research", "Suchanfrage schreiben", steered, step_id=plan_id)
+    record_step(reasoning, plan_done)
+    yield plan_done
+    research = step_event("research", "Websuche starten", steered[:80])
     record_step(reasoning, research)
     yield research
-    async for item in _emit_rule_skill(session, notebook, "research.fast", {"query": query}):
+    async for item in _emit_rule_skill(session, notebook, "research.fast", {"query": steered}):
         if "_record" in item:
             tool_calls.append(item["_record"])
             continue
@@ -1132,7 +1154,7 @@ async def _research_turn(
     else:
         assistant_text = RESEARCH_WAIT
         yield {"event": "token", "text": RESEARCH_WAIT}
-    yield {"event": "research_pending", "job_id": job_id, "query": query, "mode": "fast"}
+    yield {"event": "research_pending", "job_id": job_id, "query": steered, "mode": "fast"}
     if trace_id is None:
         trace_id = start_trace("chat", notebook.tenant_id, {"notebook_id": str(notebook.id), "model": model_label})
     assistant = await _save_assistant(

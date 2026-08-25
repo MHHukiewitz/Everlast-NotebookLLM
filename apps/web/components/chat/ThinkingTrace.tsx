@@ -15,12 +15,22 @@ export function ThinkingTrace({
   think?: string;
   busy?: boolean;
 }) {
-  if (steps.length === 0 && !think) {
+  const linked = new Set(steps.map((step) => step.call_id).filter(Boolean));
+  const extraTools = tools.filter((tool) => !linked.has(tool.call_id));
+  if (steps.length === 0 && extraTools.length === 0 && !think) {
     return null;
   }
   return (
     <div className="trace mb-3 text-left">
-      <p className="trace-title">{busy ? t.traceBusy : t.thoughts}</p>
+      {extraTools.length > 0 && (
+        <div className="mb-3">
+          <p className="trace-title">{t.toolsUsed}</p>
+          {extraTools.map((tool) => (
+            <ToolCallCard key={tool.call_id} tool={tool} featured />
+          ))}
+        </div>
+      )}
+      {steps.length > 0 || think ? <p className="trace-title">{busy ? t.traceBusy : t.thoughts}</p> : null}
       <ol className="trace-list">
         {steps.map((step) => {
           const tool = step.call_id ? tools.find((item) => item.call_id === step.call_id) : undefined;
@@ -30,7 +40,7 @@ export function ThinkingTrace({
               <div className="min-w-0">
                 <p className="font-medium text-neutral-700">{step.title}</p>
                 {step.detail ? <p className="mt-0.5 text-xs text-neutral-500">{step.detail}</p> : null}
-                {tool ? <ToolCallCard tool={tool} /> : null}
+                {tool ? <ToolCallCard tool={tool} featured={tool.skill_id.startsWith("research.")} /> : null}
               </div>
             </li>
           );

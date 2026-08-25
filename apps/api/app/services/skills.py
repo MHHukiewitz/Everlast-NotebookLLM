@@ -11,6 +11,7 @@ from app.schemas import SkillCard
 from app.services.autoname import autoname_from_skill
 from app.services.ingest import ingest_text, ingest_url
 from app.services.research import enqueue_research
+from app.services.search_query import prepare_web_query
 from app.services.studio import (
     create_audio,
     create_flashcards,
@@ -161,12 +162,14 @@ async def _notes_create(session: AsyncSession, notebook: Notebook, args: dict[st
 
 
 async def _research_fast(session: AsyncSession, notebook: Notebook, args: dict[str, Any]) -> dict[str, Any]:
-    job = await enqueue_research(session, notebook, str(args["query"]), "fast")
+    query = await prepare_web_query(str(args["query"]))
+    job = await enqueue_research(session, notebook, query, "fast")
     return {"job_id": str(job.id), "mode": "fast", "status": job.status, "query": job.query}
 
 
 async def _research_deep(session: AsyncSession, notebook: Notebook, args: dict[str, Any]) -> dict[str, Any]:
-    job = await enqueue_research(session, notebook, str(args["query"]), "deep")
+    query = await prepare_web_query(str(args["query"]))
+    job = await enqueue_research(session, notebook, query, "deep")
     return {"job_id": str(job.id), "mode": "deep", "status": job.status, "query": job.query}
 
 
@@ -209,7 +212,7 @@ REGISTRY: dict[str, Skill] = {
     ),
     "research.fast": Skill(
         SkillCard(id="research.fast", title="Schnelle Recherche", description="Websuche nach Quellen", status="available", icon="search"),
-        "Startet Fast Research.",
+        "Startet eine Websuche. Schreibe in query eine kurze Suchmaschinen-Anfrage mit Namen, Ort und Branche. Keine Wörter wie recherchiere.",
         {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         _research_fast,
     ),
@@ -365,6 +368,7 @@ STUDIO_CATALOG = [
 
 
 CHAT_TOOLS = [
+    "research.fast",
     "sources.add_url",
     "sources.add_text",
     "sources.list",

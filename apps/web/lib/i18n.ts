@@ -115,6 +115,7 @@ export const t = {
   thoughts: "Ablauf",
   traceBusy: "Ablauf…",
   traceThink: "Modell denkt…",
+  toolsUsed: "Werkzeuge",
   toolCalling: "Werkzeug wird aufgerufen…",
   toolRunning: "läuft",
   toolDone: "Fertig",

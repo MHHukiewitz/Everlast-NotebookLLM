@@ -1,4 +1,4 @@
-from app.services.search_query import clean_search_query, rewrite_route
+from app.services.search_query import clean_search_query, looks_like_web_query, rewrite_route, strip_web_query
 
 
 def test_clean_search_query_takes_first_line() -> None:
@@ -15,3 +15,11 @@ def test_rewrite_route_uses_hetzner_small_model(monkeypatch) -> None:
         "Qwen/Qwen3.6-35B-A3B-FP8,Qwen3.8-27B",
     )
     assert rewrite_route() == ("hetzner", "Qwen3.8-27B")
+
+
+def test_strip_web_query_drops_research_verbs() -> None:
+    assert strip_web_query("recherchiere wichtige mitbewerber von everlast") == "wichtige mitbewerber von everlast"
+    assert strip_web_query("Bitte research the company history") == "the company history"
+    assert strip_web_query("suche im web nach Everlast Consulting") == "Everlast Consulting"
+    assert looks_like_web_query("Everlast Consulting KI Mitbewerber Deutschland")
+    assert not looks_like_web_query("recherchiere wichtige mitbewerber von everlast")

@@ -8,6 +8,7 @@ import {
   stripSelfIntro,
   stepsFromReasoning,
   stripCitationDump,
+  toolArgumentPreview,
   usedCitations,
   visibleChatText,
   type LivePart,
@@ -148,3 +149,9 @@ assert.deepEqual(
     [7, "https://roover.example", "ROOVER"],
   ],
 );
+
+assert.equal(
+  toolArgumentPreview('{"query":"Everlast Consulting KI Mitbewerber Deutschland"}'),
+  "Everlast Consulting KI Mitbewerber Deutschland",
+);
+assert.equal(toolArgumentPreview("plain search text"), "plain search text");
