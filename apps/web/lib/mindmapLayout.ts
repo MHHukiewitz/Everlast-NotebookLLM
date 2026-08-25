@@ -11,7 +11,9 @@ export type PlacedBox = {
   depth: number;
 };
 
-export type PlacedEdge = { x1: number; y1: number; x2: number; y2: number };
+export type EdgeToward = "left" | "right" | "down";
+
+export type PlacedEdge = { x1: number; y1: number; x2: number; y2: number; toward: EdgeToward };
 
 export type MindLayout = {
   boxes: PlacedBox[];
@@ -24,19 +26,19 @@ type LocalLayout = MindLayout & { root: PlacedBox };
 
 export const MINDMAP_FONT = 12;
 export const WIDE_PANE = 560;
-const MAX_LABEL_CHARS = 22;
-const CHAR_W = 6.8;
-const LINE_H = 15;
-const PAD_X = 10;
-const PAD_Y = 6;
-const H_GAP = 16;
-const V_GAP = 8;
-const ROW_GAP = 14;
-const CANVAS_PAD = 16;
-const NODE_MIN_W = 44;
-const NODE_MAX_W = 156;
-const MAX_PER_COLUMN = 6;
-const MIN_CHILD_BUDGET = 72;
+const MAX_LABEL_CHARS = 20;
+const CHAR_W = 7.2;
+const LINE_H = 16;
+const PAD_X = 12;
+const PAD_Y = 8;
+const H_GAP = 28;
+const V_GAP = 12;
+const ROW_GAP = 18;
+const CANVAS_PAD = 20;
+const NODE_MIN_W = 48;
+const NODE_MAX_W = 168;
+const MAX_PER_COLUMN = 5;
+const MIN_CHILD_BUDGET = 80;
 
 const NODE_TOKEN =
   /root\(\([^)]*\)\)|[^\s(]+\(\([^)]*\)\)|[^\s(]+\([^)]*\)|[^\s[]+\[[^\]]*\]|"[^"]+"|[^\s]+/g;
@@ -209,6 +211,7 @@ function shift(local: LocalLayout, dx: number, dy: number): LocalLayout {
       y1: edge.y1 + dy,
       x2: edge.x2 + dx,
       y2: edge.y2 + dy,
+      toward: edge.toward,
     })),
     width: local.width,
     height: local.height,
@@ -219,7 +222,13 @@ function shift(local: LocalLayout, dx: number, dy: number): LocalLayout {
 function mirrorX(local: LocalLayout): LocalLayout {
   const flipped: LocalLayout = {
     boxes: local.boxes.map((box) => ({ ...box, x: -box.x - box.w })),
-    edges: local.edges.map((edge) => ({ x1: -edge.x1, y1: edge.y1, x2: -edge.x2, y2: edge.y2 })),
+    edges: local.edges.map((edge) => ({
+      x1: -edge.x1,
+      y1: edge.y1,
+      x2: -edge.x2,
+      y2: edge.y2,
+      toward: edge.toward === "left" ? "right" : edge.toward === "right" ? "left" : edge.toward,
+    })),
     width: local.width,
     height: local.height,
     root: { ...local.root, x: -local.root.x - local.root.w },
@@ -228,13 +237,14 @@ function mirrorX(local: LocalLayout): LocalLayout {
   return shift(flipped, -minX, 0);
 }
 
-function connect(parent: PlacedBox, child: PlacedBox, toward: "left" | "right" | "down"): PlacedEdge {
+function connect(parent: PlacedBox, child: PlacedBox, toward: EdgeToward): PlacedEdge {
   if (toward === "down") {
     return {
       x1: parent.x + parent.w / 2,
       y1: parent.y + parent.h,
       x2: child.x + child.w / 2,
       y2: child.y,
+      toward,
     };
   }
   if (toward === "left") {
@@ -243,6 +253,7 @@ function connect(parent: PlacedBox, child: PlacedBox, toward: "left" | "right" |
       y1: parent.y + parent.h / 2,
       x2: child.x + child.w,
       y2: child.y + child.h / 2,
+      toward,
     };
   }
   return {
@@ -250,7 +261,17 @@ function connect(parent: PlacedBox, child: PlacedBox, toward: "left" | "right" |
     y1: parent.y + parent.h / 2,
     x2: child.x,
     y2: child.y + child.h / 2,
+    toward,
   };
+}
+
+function remapLayouts(layouts: LocalLayout[], packed: LocalLayout): LocalLayout[] {
+  return layouts.map((child) => {
+    const found = packed.boxes.find((box) => box.id === child.root.id);
+    const dx = found ? found.x - child.root.x : 0;
+    const dy = found ? found.y - child.root.y : 0;
+    return shift(child, dx, dy);
+  });
 }
 
 function mergeParts(parts: LocalLayout[]): { boxes: PlacedBox[]; edges: PlacedEdge[] } {
@@ -339,6 +360,7 @@ function packChildren(layouts: LocalLayout[], budget: number): LocalLayout {
   }
   const allLeaves = layouts.every((item) => item.boxes.length === 1);
   if (allLeaves && layouts.length > 3) return packColumns(layouts, budget);
+  if (allLeaves) return stackVertical(layouts);
   return packRows(layouts, budget);
 }
 
@@ -359,16 +381,13 @@ function layoutNode(node: MindNode, maxWidth: number, depth: number, nextId: () 
   }
   const widthBudget = Math.max(maxWidth, size.w);
   const besideBudget = widthBudget - size.w - H_GAP;
-  const beside = besideBudget >= MIN_CHILD_BUDGET;
-  const budget = beside ? besideBudget : Math.max(MIN_CHILD_BUDGET, widthBudget - 16);
+  const leafKids = node.children.every((child) => child.children.length === 0);
+  const manyLeaves = leafKids && node.children.length > 4;
+  const beside = !manyLeaves;
+  const budget = beside ? Math.max(MIN_CHILD_BUDGET, besideBudget) : Math.max(MIN_CHILD_BUDGET, widthBudget - 16);
   const childLayouts = node.children.map((child) => layoutNode(child, budget, depth + 1, nextId));
   const packed = packChildren(childLayouts, budget);
-  const placedChildren = childLayouts.map((child) => {
-    const found = packed.boxes.find((box) => box.id === child.root.id);
-    const dx = found ? found.x - child.root.x : 0;
-    const dy = found ? found.y - child.root.y : 0;
-    return shift(child, dx, dy);
-  });
+  const placedChildren = remapLayouts(childLayouts, packed);
   let rootX = 0;
   let rootY = 0;
   let childrenX = 0;
@@ -411,36 +430,32 @@ function finish(local: LocalLayout): MindLayout {
 function layoutStackedBranches(root: MindNode, targetWidth: number, nextId: () => number): MindLayout {
   const size = measureLabel(root.label);
   const inner = Math.max(NODE_MIN_W, targetWidth - CANVAS_PAD * 2);
+  const childBudget = Math.max(MIN_CHILD_BUDGET, inner - size.w - H_GAP);
   const simple = root.children.every(
     (child) => child.children.length <= MAX_PER_COLUMN && child.children.every((grand) => grand.children.length === 0),
   );
-  const cols = simple && root.children.length >= 4 ? Math.min(2, Math.max(1, Math.floor(inner / 180))) : 1;
-  const childBudget = cols > 1 ? Math.floor((inner - (cols - 1) * H_GAP) / cols) : inner;
   const childLayouts = root.children.map((child) => layoutNode(child, childBudget, 1, nextId));
-  const packed = cols > 1 ? packRows(childLayouts, inner) : stackVertical(childLayouts);
-  const body = shift(packed, CANVAS_PAD, CANVAS_PAD + size.h + ROW_GAP);
+  const packed =
+    simple && root.children.length >= 4 ? packChildren(childLayouts, childBudget) : stackVertical(childLayouts);
+  const rootY = CANVAS_PAD + Math.max(0, (packed.height - size.h) / 2);
+  const kidsY = CANVAS_PAD + Math.max(0, (size.h - packed.height) / 2);
   const rootBox: PlacedBox = {
     id: nextId(),
     label: root.label,
     lines: size.lines,
-    x: CANVAS_PAD + Math.max(0, (inner - size.w) / 2),
-    y: CANVAS_PAD,
+    x: CANVAS_PAD,
+    y: rootY,
     w: size.w,
     h: size.h,
     depth: 0,
   };
-  const kids = childLayouts.map((child) => {
-    const found = body.boxes.find((box) => box.id === child.root.id);
-    const dx = found ? found.x - child.root.x : 0;
-    const dy = found ? found.y - child.root.y : 0;
-    return shift(child, dx, dy);
-  });
+  const kids = remapLayouts(childLayouts, shift(packed, CANVAS_PAD + size.w + H_GAP, kidsY));
   const merged = mergeParts(kids);
   return finish({
     boxes: [rootBox, ...merged.boxes],
-    edges: [...merged.edges, ...kids.map((child) => connect(rootBox, child.root, "down"))],
-    width: Math.max(inner, body.width) + CANVAS_PAD * 2,
-    height: CANVAS_PAD + size.h + ROW_GAP + body.height + CANVAS_PAD,
+    edges: [...merged.edges, ...kids.map((child) => connect(rootBox, child.root, "right"))],
+    width: CANVAS_PAD + size.w + H_GAP + packed.width + CANVAS_PAD,
+    height: CANVAS_PAD * 2 + Math.max(size.h, packed.height),
     root: rootBox,
   });
 }
@@ -466,18 +481,8 @@ function layoutBalanced(root: MindNode, targetWidth: number, nextId: () => numbe
   };
   const leftPlaced = shift(leftPack, CANVAS_PAD, CANVAS_PAD + (midH - leftPack.height) / 2);
   const rightPlaced = shift(rightPack, rootBox.x + size.w + H_GAP, CANVAS_PAD + (midH - rightPack.height) / 2);
-  const leftKids = leftLayouts.map((child) => {
-    const found = leftPlaced.boxes.find((box) => box.id === child.root.id);
-    const dx = found ? found.x - child.root.x : 0;
-    const dy = found ? found.y - child.root.y : 0;
-    return shift(child, dx, dy);
-  });
-  const rightKids = rightLayouts.map((child) => {
-    const found = rightPlaced.boxes.find((box) => box.id === child.root.id);
-    const dx = found ? found.x - child.root.x : 0;
-    const dy = found ? found.y - child.root.y : 0;
-    return shift(child, dx, dy);
-  });
+  const leftKids = remapLayouts(leftLayouts, leftPlaced);
+  const rightKids = remapLayouts(rightLayouts, rightPlaced);
   const merged = mergeParts([...leftKids, ...rightKids]);
   return finish({
     boxes: [rootBox, ...merged.boxes],
@@ -520,12 +525,54 @@ export function layoutMindmap(
   return layoutStackedBranches(root, width, nextId);
 }
 
-export function edgePath(edge: PlacedEdge): string {
-  const dx = Math.max(16, Math.abs(edge.x2 - edge.x1) / 2);
-  const dy = Math.max(12, Math.abs(edge.y2 - edge.y1) / 3);
-  if (Math.abs(edge.y2 - edge.y1) > Math.abs(edge.x2 - edge.x1)) {
-    return `M ${edge.x1} ${edge.y1} C ${edge.x1} ${edge.y1 + dy}, ${edge.x2} ${edge.y2 - dy}, ${edge.x2} ${edge.y2}`;
+function roundedElbow(x1: number, y1: number, midX: number, y2: number, x2: number): string {
+  const radius = 8;
+  const v = Math.abs(y2 - y1);
+  const h1 = Math.abs(midX - x1);
+  const h2 = Math.abs(x2 - midX);
+  if (v < radius * 2 || h1 < radius || h2 < radius) {
+    return `M ${x1} ${y1} H ${midX} V ${y2} H ${x2}`;
   }
-  const dir = edge.x2 >= edge.x1 ? 1 : -1;
-  return `M ${edge.x1} ${edge.y1} C ${edge.x1 + dir * dx} ${edge.y1}, ${edge.x2 - dir * dx} ${edge.y2}, ${edge.x2} ${edge.y2}`;
+  const sy = y2 >= y1 ? 1 : -1;
+  const sxIn = midX >= x1 ? 1 : -1;
+  const sxOut = x2 >= midX ? 1 : -1;
+  return [
+    `M ${x1} ${y1}`,
+    `H ${midX - sxIn * radius}`,
+    `Q ${midX} ${y1} ${midX} ${y1 + sy * radius}`,
+    `V ${y2 - sy * radius}`,
+    `Q ${midX} ${y2} ${midX + sxOut * radius} ${y2}`,
+    `H ${x2}`,
+  ].join(" ");
+}
+
+function roundedDown(x1: number, y1: number, midY: number, x2: number, y2: number): string {
+  const radius = 8;
+  const h = Math.abs(x2 - x1);
+  const v1 = Math.abs(midY - y1);
+  const v2 = Math.abs(y2 - midY);
+  if (h < radius * 2 || v1 < radius || v2 < radius) {
+    return `M ${x1} ${y1} V ${midY} H ${x2} V ${y2}`;
+  }
+  const sx = x2 >= x1 ? 1 : -1;
+  const syIn = midY >= y1 ? 1 : -1;
+  const syOut = y2 >= midY ? 1 : -1;
+  return [
+    `M ${x1} ${y1}`,
+    `V ${midY - syIn * radius}`,
+    `Q ${x1} ${midY} ${x1 + sx * radius} ${midY}`,
+    `H ${x2 - sx * radius}`,
+    `Q ${x2} ${midY} ${x2} ${midY + syOut * radius}`,
+    `V ${y2}`,
+  ].join(" ");
+}
+
+export function edgePath(edge: PlacedEdge): string {
+  if (edge.toward === "down") {
+    const midY = edge.y1 + Math.max(12, (edge.y2 - edge.y1) / 2);
+    return roundedDown(edge.x1, edge.y1, midY, edge.x2, edge.y2);
+  }
+  const dir = edge.toward === "left" ? -1 : 1;
+  const midX = edge.x1 + dir * Math.max(14, Math.abs(edge.x2 - edge.x1) / 2);
+  return roundedElbow(edge.x1, edge.y1, midX, edge.y2, edge.x2);
 }

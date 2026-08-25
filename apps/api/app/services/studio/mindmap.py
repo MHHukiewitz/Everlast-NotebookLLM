@@ -99,19 +99,19 @@ def parse_mindmap(source: str) -> MindNode:
 
 
 WIDE_PANE = 560
-_MAX_LABEL_CHARS = 22
-_CHAR_W = 6.8
-_LINE_H = 15
-_PAD_X = 10
-_PAD_Y = 6
-_H_GAP = 16
-_V_GAP = 8
-_ROW_GAP = 14
-_CANVAS_PAD = 16
-_NODE_MIN_W = 44
-_NODE_MAX_W = 156
-_MAX_PER_COLUMN = 6
-_MIN_CHILD_BUDGET = 72
+_MAX_LABEL_CHARS = 20
+_CHAR_W = 7.2
+_LINE_H = 16
+_PAD_X = 12
+_PAD_Y = 8
+_H_GAP = 28
+_V_GAP = 12
+_ROW_GAP = 18
+_CANVAS_PAD = 20
+_NODE_MIN_W = 48
+_NODE_MAX_W = 168
+_MAX_PER_COLUMN = 5
+_MIN_CHILD_BUDGET = 80
 
 
 class MindBox:
@@ -126,11 +126,12 @@ class MindBox:
 
 
 class MindEdge:
-    def __init__(self, x1: float, y1: float, x2: float, y2: float) -> None:
+    def __init__(self, x1: float, y1: float, x2: float, y2: float, toward: str = "right") -> None:
         self.x1 = x1
         self.y1 = y1
         self.x2 = x2
         self.y2 = y2
+        self.toward = toward
 
 
 class MindLayout:
@@ -213,7 +214,7 @@ def _copy_box(box: MindBox, dx: float = 0, dy: float = 0) -> MindBox:
 def _shift(local: _Local, dx: float, dy: float) -> _Local:
     return _Local(
         [_copy_box(box, dx, dy) for box in local.boxes],
-        [MindEdge(edge.x1 + dx, edge.y1 + dy, edge.x2 + dx, edge.y2 + dy) for edge in local.edges],
+        [MindEdge(edge.x1 + dx, edge.y1 + dy, edge.x2 + dx, edge.y2 + dy, edge.toward) for edge in local.edges],
         local.width,
         local.height,
         _copy_box(local.root, dx, dy),
@@ -223,7 +224,16 @@ def _shift(local: _Local, dx: float, dy: float) -> _Local:
 def _mirror_x(local: _Local) -> _Local:
     flipped = _Local(
         [MindBox(box.id, box.label, -box.x - box.w, box.y, box.w, box.h, box.depth) for box in local.boxes],
-        [MindEdge(-edge.x1, edge.y1, -edge.x2, edge.y2) for edge in local.edges],
+        [
+            MindEdge(
+                -edge.x1,
+                edge.y1,
+                -edge.x2,
+                edge.y2,
+                "right" if edge.toward == "left" else "left" if edge.toward == "right" else edge.toward,
+            )
+            for edge in local.edges
+        ],
         local.width,
         local.height,
         MindBox(
@@ -242,10 +252,10 @@ def _mirror_x(local: _Local) -> _Local:
 
 def _connect(parent: MindBox, child: MindBox, toward: str) -> MindEdge:
     if toward == "down":
-        return MindEdge(parent.x + parent.w / 2, parent.y + parent.h, child.x + child.w / 2, child.y)
+        return MindEdge(parent.x + parent.w / 2, parent.y + parent.h, child.x + child.w / 2, child.y, toward)
     if toward == "left":
-        return MindEdge(parent.x, parent.y + parent.h / 2, child.x + child.w, child.y + child.h / 2)
-    return MindEdge(parent.x + parent.w, parent.y + parent.h / 2, child.x, child.y + child.h / 2)
+        return MindEdge(parent.x, parent.y + parent.h / 2, child.x + child.w, child.y + child.h / 2, toward)
+    return MindEdge(parent.x + parent.w, parent.y + parent.h / 2, child.x, child.y + child.h / 2, toward)
 
 
 def _merge(parts: list[_Local]) -> tuple[list[MindBox], list[MindEdge]]:
@@ -320,8 +330,11 @@ def _pack_rows(layouts: list[_Local], budget: int) -> _Local:
 def _pack_children(layouts: list[_Local], budget: int) -> _Local:
     if not layouts:
         return _empty_local()
-    if all(len(item.boxes) == 1 for item in layouts) and len(layouts) > 3:
+    leaves = all(len(item.boxes) == 1 for item in layouts)
+    if leaves and len(layouts) > 3:
         return _pack_columns(layouts, budget)
+    if leaves:
+        return _stack_vertical(layouts)
     return _pack_rows(layouts, budget)
 
 
@@ -348,8 +361,10 @@ def _layout_node(
         return _Local([self], [], width, height, self)
     width_budget = max(max_width, width)
     beside_budget = width_budget - width - _H_GAP
-    beside = beside_budget >= _MIN_CHILD_BUDGET
-    budget = beside_budget if beside else max(_MIN_CHILD_BUDGET, width_budget - 16)
+    leaf_kids = all(not child.children for child in node.children)
+    many_leaves = leaf_kids and len(node.children) > 4
+    beside = not many_leaves
+    budget = max(_MIN_CHILD_BUDGET, beside_budget if beside else width_budget - 16)
     child_layouts = [_layout_node(child, budget, depth + 1, next_id, measure) for child in node.children]
     packed = _pack_children(child_layouts, budget)
     placed_children = _remap(child_layouts, packed)
@@ -393,32 +408,28 @@ def _layout_stacked(
 ) -> MindLayout:
     width, height = measure(root.label)
     inner = max(_NODE_MIN_W, target_width - _CANVAS_PAD * 2)
+    child_budget = max(_MIN_CHILD_BUDGET, inner - width - _H_GAP)
     simple = all(
         len(child.children) <= _MAX_PER_COLUMN and all(not grand.children for grand in child.children)
         for child in root.children
     )
-    cols = min(2, max(1, inner // 180)) if simple and len(root.children) >= 4 else 1
-    child_budget = (inner - (cols - 1) * _H_GAP) // cols if cols > 1 else inner
     child_layouts = [_layout_node(child, child_budget, 1, next_id, measure) for child in root.children]
-    packed = _pack_rows(child_layouts, inner) if cols > 1 else _stack_vertical(child_layouts)
-    body = _shift(packed, _CANVAS_PAD, _CANVAS_PAD + height + _ROW_GAP)
-    root_box = MindBox(
-        next_id(),
-        root.label,
-        _CANVAS_PAD + max(0, (inner - width) / 2),
-        _CANVAS_PAD,
-        width,
-        height,
-        0,
+    packed = (
+        _pack_children(child_layouts, child_budget)
+        if simple and len(root.children) >= 4
+        else _stack_vertical(child_layouts)
     )
-    kids = _remap(child_layouts, body)
+    root_y = _CANVAS_PAD + max(0, (packed.height - height) / 2)
+    kids_y = _CANVAS_PAD + max(0, (height - packed.height) / 2)
+    root_box = MindBox(next_id(), root.label, _CANVAS_PAD, root_y, width, height, 0)
+    kids = _remap(child_layouts, _shift(packed, _CANVAS_PAD + width + _H_GAP, kids_y))
     boxes, edges = _merge(kids)
     return _finish(
         _Local(
             [root_box, *boxes],
-            [*edges, *[_connect(root_box, child.root, "down") for child in kids]],
-            max(inner, body.width) + _CANVAS_PAD * 2,
-            _CANVAS_PAD + height + _ROW_GAP + body.height + _CANVAS_PAD,
+            [*edges, *[_connect(root_box, child.root, "right") for child in kids]],
+            _CANVAS_PAD + width + _H_GAP + packed.width + _CANVAS_PAD,
+            _CANVAS_PAD * 2 + max(height, packed.height),
             root_box,
         )
     )

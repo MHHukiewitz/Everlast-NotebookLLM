@@ -32,13 +32,21 @@ const skills: MindNode = {
 const narrow = layoutMindmap(skills, 440);
 const interests = narrow.boxes.filter((box) => box.label.startsWith("Interests-"));
 assert.equal(interests.length, 17);
-assert.ok(narrow.width <= 520, `narrow width ${narrow.width}`);
+assert.ok(narrow.width <= 640, `narrow width ${narrow.width}`);
 assert.ok(narrow.width >= 300, `narrow width ${narrow.width} should use the pane`);
 const interestXs = new Set(interests.map((box) => Math.round(box.x / 12)));
 assert.ok(interestXs.size >= 3, "long sibling lists must wrap into several columns");
 const interestSpan = Math.max(...interests.map((box) => box.y + box.h)) - Math.min(...interests.map((box) => box.y));
-assert.ok(interestSpan < 8 * 36, `interests column span ${interestSpan} should wrap`);
-assert.ok(narrow.height < 700, `narrow height ${narrow.height} should stay compact`);
+assert.ok(interestSpan < 8 * 42, `interests column span ${interestSpan} should wrap`);
+assert.ok(narrow.height < 1100, `narrow height ${narrow.height} should stay compact`);
+for (let i = 0; i < narrow.boxes.length; i += 1) {
+  for (let j = i + 1; j < narrow.boxes.length; j += 1) {
+    const a = narrow.boxes[i];
+    const b = narrow.boxes[j];
+    const overlap = a.x < b.x + b.w - 1 && a.x + a.w - 1 > b.x && a.y < b.y + b.h - 1 && a.y + a.h - 1 > b.y;
+    assert.equal(overlap, false, `${a.label} overlaps ${b.label}`);
+  }
+}
 
 const wide = layoutMindmap(skills, WIDE_PANE + 80);
 const root = wide.boxes.find((box) => box.depth === 0);
@@ -65,7 +73,7 @@ const layers: MindNode = {
   children: Array.from({ length: 6 }, (_, index) => branch(`Schicht ${index + 1}`, 2)),
 };
 const compact = layoutMindmap(layers, 440);
-assert.ok(compact.height < 360, `short branches should share rows, height ${compact.height}`);
+assert.ok(compact.height < 720, `short branches should share rows, height ${compact.height}`);
 const layerParents = compact.boxes.filter((box) => box.label.startsWith("Schicht"));
 const layerXs = new Set(layerParents.map((box) => Math.round(box.x / 40)));
 assert.ok(layerXs.size >= 2, "several short branches should sit in more than one column");

@@ -14,7 +14,9 @@ import { downloadSvgAsPng, downloadSvgElement } from "@/lib/svgPng";
 
 export { normalizeMermaid };
 
-const FILLS = ["#eff6ff", "#f5f3ff", "#f0fdf4", "#fff7ed"];
+const FILLS = ["#1d4ed8", "#dbeafe", "#ede9fe", "#dcfce7", "#ffedd5"];
+const STROKES = ["#1e3a8a", "#60a5fa", "#a78bfa", "#4ade80", "#fb923c"];
+const TEXTS = ["#ffffff", "#1f2937", "#1f2937", "#1f2937", "#1f2937"];
 
 export function MindmapView({
   source,
@@ -50,7 +52,7 @@ export function MindmapView({
     <div>
       <div
         ref={paneRef}
-        className="max-h-[min(70vh,36rem)] min-h-[12rem] overflow-auto rounded-lg bg-mist p-2"
+        className="max-h-[min(70vh,36rem)] min-h-[16rem] overflow-auto rounded-lg bg-white p-2"
       >
         {normalized ? (
           <svg
@@ -61,45 +63,54 @@ export function MindmapView({
             viewBox={`0 0 ${layout.width} ${layout.height}`}
             width={layout.width}
             height={layout.height}
+            className="h-auto w-full"
             fontFamily="Inter, ui-sans-serif, system-ui, sans-serif"
             fontSize={MINDMAP_FONT}
           >
-            <rect width={layout.width} height={layout.height} fill="#f6f7f8" />
+            <rect width={layout.width} height={layout.height} fill="#ffffff" />
             {layout.edges.map((edge, index) => (
               <path
                 key={`e-${index}`}
                 d={edgePath(edge)}
                 fill="none"
-                stroke="#a5b4c8"
-                strokeWidth="1.6"
+                stroke="#94a3b8"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
               />
             ))}
-            {layout.boxes.map((box) => (
-              <g key={box.id}>
-                <rect
-                  x={box.x}
-                  y={box.y}
-                  width={box.w}
-                  height={box.h}
-                  rx="8"
-                  fill={box.depth === 0 ? "#dbeafe" : FILLS[box.depth % FILLS.length]}
-                  stroke="#2563eb"
-                  strokeWidth={box.depth === 0 ? 1.6 : 1}
-                />
-                {box.lines.map((line, index) => (
-                  <text
-                    key={`${box.id}-${index}`}
-                    x={box.x + box.w / 2}
-                    y={box.y + box.h / 2 - ((box.lines.length - 1) * 15) / 2 + index * 15}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    fill="#1f1f1f"
-                  >
-                    {line}
-                  </text>
-                ))}
-              </g>
-            ))}
+            {layout.boxes.map((box) => {
+              const tone = Math.min(box.depth, FILLS.length - 1);
+              const lineH = box.depth === 0 ? 16 : 15;
+              return (
+                <g key={box.id}>
+                  <rect
+                    x={box.x}
+                    y={box.y}
+                    width={box.w}
+                    height={box.h}
+                    rx={box.depth === 0 ? 14 : 10}
+                    fill={FILLS[tone]}
+                    stroke={STROKES[tone]}
+                    strokeWidth={box.depth === 0 ? 0 : 1}
+                  />
+                  {box.lines.map((line, index) => (
+                    <text
+                      key={`${box.id}-${index}`}
+                      x={box.x + box.w / 2}
+                      y={box.y + box.h / 2 - ((box.lines.length - 1) * lineH) / 2 + index * lineH}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      fill={TEXTS[tone]}
+                      fontSize={box.depth === 0 ? 13 : MINDMAP_FONT}
+                      fontWeight={box.depth === 0 ? 600 : 500}
+                    >
+                      {line}
+                    </text>
+                  ))}
+                </g>
+              );
+            })}
           </svg>
         ) : null}
       </div>

@@ -102,18 +102,18 @@ def test_layout_wraps_long_sibling_lists() -> None:
     interests = [box for box in placed.boxes if box.label.startswith("Interests-")]
     assert len(interests) == 17
     assert placed.width >= 300
-    assert placed.height < 700
+    assert placed.height < 1100
     xs = {round(box.x / 12) for box in interests}
     assert len(xs) >= 3
     span = max(box.y + box.h for box in interests) - min(box.y for box in interests)
-    assert span < 8 * 36
+    assert span < 8 * 42
 
 
 def test_layout_packs_short_branches() -> None:
     root = MindNode("Architektur")
     root.children = [_branch(f"Schicht {index}", 2) for index in range(6)]
     placed = layout_mindmap(root, 440)
-    assert placed.height < 360
+    assert placed.height < 720
     parents = [box for box in placed.boxes if box.label.startswith("Schicht")]
     xs = {round(box.x / 40) for box in parents}
     assert len(xs) >= 2

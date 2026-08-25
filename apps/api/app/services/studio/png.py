@@ -9,6 +9,9 @@ from app.services.studio.cites import footnote_line
 from app.services.studio.mindmap import layout_mindmap, parse_mindmap
 
 FILLS = ((239, 246, 255), (245, 243, 255), (240, 253, 244), (255, 247, 237))
+MIND_FILLS = ((29, 78, 216), (219, 234, 254), (237, 233, 254), (220, 252, 231), (255, 237, 213))
+MIND_STROKES = ((30, 58, 138), (96, 165, 250), (167, 139, 250), (74, 222, 128), (251, 146, 60))
+MIND_TEXT = ((255, 255, 255), (31, 41, 55), (31, 41, 55), (31, 41, 55), (31, 41, 55))
 CHART_COLORS = ((37, 99, 235), (124, 58, 237), (22, 163, 74), (217, 119, 6), (219, 39, 119), (8, 145, 178))
 GAP = 16
 PAGE_W = 960
@@ -231,20 +234,29 @@ def mindmap_png(title: str, payload: dict[str, Any], citations: list[dict[str, A
     canvas = ImageDraw.Draw(image)
     canvas.text((24, 16), title, font=title_font, fill=(31, 31, 31))
     for edge in placed.edges:
-        canvas.line(
-            (edge.x1 + 12, edge.y1 + title_h, edge.x2 + 12, edge.y2 + title_h),
-            fill=(165, 180, 200),
-            width=2,
-        )
-    for index, box in enumerate(placed.boxes):
+        x1, y1 = edge.x1 + 12, edge.y1 + title_h
+        x2, y2 = edge.x2 + 12, edge.y2 + title_h
+        if edge.toward == "down":
+            mid_y = y1 + max(12, (y2 - y1) / 2)
+            canvas.line((x1, y1, x1, mid_y, x2, mid_y, x2, y2), fill=(148, 163, 184), width=2)
+        else:
+            direction = -1 if edge.toward == "left" else 1
+            mid_x = x1 + direction * max(14, abs(x2 - x1) / 2)
+            canvas.line((x1, y1, mid_x, y1, mid_x, y2, x2, y2), fill=(148, 163, 184), width=2)
+    for box in placed.boxes:
         x = int(box.x + 12)
         y = int(box.y + title_h)
-        fill = FILLS[index % len(FILLS)]
-        canvas.rounded_rectangle((x, y, x + box.w, y + box.h), 10, fill=fill, outline=(37, 99, 235))
+        tone = min(box.depth, len(MIND_FILLS) - 1)
+        canvas.rounded_rectangle(
+            (x, y, x + box.w, y + box.h),
+            14 if box.depth == 0 else 10,
+            fill=MIND_FILLS[tone],
+            outline=MIND_STROKES[tone],
+        )
         lines = _wrap(canvas, box.label, node_font, max(box.w - 16, 40)) or [box.label]
         cursor = y + 8
         for line in lines:
-            canvas.text((x + 12, cursor), line, font=node_font, fill=(31, 31, 31))
+            canvas.text((x + 12, cursor), line, font=node_font, fill=MIND_TEXT[tone])
             cursor += 18
     _draw_footnotes(canvas, citations, _font(11), image.height - 22 - note_h, max(placed.width, 360))
     canvas.text((24, image.height - 22), AI_MARK, font=_font(11), fill=(115, 115, 115))
