@@ -1,4 +1,11 @@
-from app.services.search_query import clean_search_query, looks_like_web_query, rewrite_route, strip_web_query
+from app.services.search_query import (
+    RETRY_WEB_SYSTEM,
+    WEB_REWRITE_SYSTEM,
+    clean_search_query,
+    looks_like_web_query,
+    rewrite_route,
+    strip_web_query,
+)
 
 
 def test_clean_search_query_takes_first_line() -> None:
@@ -23,3 +30,5 @@ def test_strip_web_query_drops_research_verbs() -> None:
     assert strip_web_query("suche im web nach Everlast Consulting") == "Everlast Consulting"
     assert looks_like_web_query("Everlast Consulting KI Mitbewerber Deutschland")
     assert not looks_like_web_query("recherchiere wichtige mitbewerber von everlast")
+    assert "gleichnamigen Marken" in WEB_REWRITE_SYSTEM
+    assert "andere Suchanfrage" in RETRY_WEB_SYSTEM

@@ -8,14 +8,22 @@ from app.services.net import host_open
 REWRITE_SYSTEM = (
     "Schreibe nur eine kurze Suchanfrage für eine Vektorsuche. "
     "Nutze 5 bis 12 Stichwörter, Namen und Synonyme. "
+    "Bleibe beim Thema der Frage. Verwechsle keine gleichnamigen Marken. "
     "Keine Sätze. Keine Erklärung. Keine Anführungszeichen."
 )
 WEB_REWRITE_SYSTEM = (
     "Schreibe nur eine Anfrage für eine Websuchmaschine. "
     "Entferne Wörter wie recherchiere, suche, bitte, wichtig. "
     "Behalte Namen, Produkte, Orte, Branche und Jahr. "
+    "Bleibe beim Thema der Frage. Verwechsle keine gleichnamigen Marken. "
     "Ergänze sinnvolle Suchwörter und Synonyme. "
     "Eine Zeile, 4 bis 12 Wörter. Keine Anführungszeichen. Keine Erklärung."
+)
+RETRY_WEB_SYSTEM = (
+    "Die erste Websuche hat die Frage nicht beantwortet. "
+    "Schreibe eine andere Suchanfrage. "
+    "Ändere Winkel, Synonyme oder schließe die falsche Bedeutung aus. "
+    "Bleibe beim Thema. Eine Zeile, 4 bis 12 Wörter. Keine Erklärung."
 )
 _WEB_PREFIX = re.compile(
     r"^(?:bitte\s+)?(?:recherchiere(?:n)?|research|suche(?:\s+im\s+web)?(?:\s+nach)?|search(?:\s+for)?)\s+",
@@ -97,3 +105,13 @@ async def prepare_web_query(question: str) -> str:
     if looks_like_web_query(question):
         return question.strip()
     return await rewrite_web_query(question)
+
+
+async def rewrite_retry_web_query(question: str, first_query: str, note: str = "") -> str:
+    payload = f"Frage: {question}\nErste Suche: {first_query}"
+    if note.strip():
+        payload = f"{payload}\nHinweis: {note.strip()[:400]}"
+    alt = await _rewrite(payload, RETRY_WEB_SYSTEM)
+    if alt.casefold() == first_query.casefold():
+        return first_query
+    return alt

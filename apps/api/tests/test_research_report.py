@@ -35,6 +35,25 @@ class _FakeSession:
         self.committed = True
 
 
+def test_report_misses_question_detects_empty_competitor_note() -> None:
+    assert research.report_misses_question("")
+    assert research.report_misses_question(
+        "Die vorliegenden Quellen enthalten keine konkreten Informationen zu direkten Mitbewerbern."
+    )
+    assert not research.report_misses_question("Capgemini und Accenture werden als Beratungshäuser genannt. [1]")
+
+
+def test_unique_search_results_drops_duplicate_urls() -> None:
+    items = research.unique_search_results(
+        [
+            {"url": "https://a.example", "title": "A"},
+            {"url": "https://a.example", "title": "A2"},
+            {"url": "https://b.example", "title": "B"},
+        ]
+    )
+    assert [item["url"] for item in items] == ["https://a.example", "https://b.example"]
+
+
 def test_fallback_report_lists_hits() -> None:
     text = research.fallback_report(
         "fast",
@@ -108,7 +127,6 @@ def test_fast_research_ready_before_report(monkeypatch) -> None:
 
     async def fake_write(_session, job_arg) -> None:
         wrote.append(job_arg.id)
-        assert job_arg.status == "ready"
         assert job_arg.report_md == ""
         job_arg.report_md = "Zusammenfassung"
 
@@ -118,6 +136,49 @@ def test_fast_research_ready_before_report(monkeypatch) -> None:
     assert wrote == [job.id]
     assert job.report_md == "Zusammenfassung"
     assert any(isinstance(row, Citation) for row in session.added)
+
+
+def test_fast_research_retries_other_query_when_report_is_thin(monkeypatch) -> None:
+    job = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id="default",
+        notebook_id=uuid.uuid4(),
+        query="Everlast Consulting Mitbewerber",
+        mode="fast",
+        status="queued",
+        progress="",
+        report_md="",
+    )
+    session = _FakeSession([], None)
+    queries: list[str] = []
+
+    monkeypatch.setattr(research, "searx_reachable", lambda: True)
+    monkeypatch.setattr(
+        research,
+        "searx_search",
+        lambda query, count=8: queries.append(query)
+        or (
+            [{"url": "https://own.example", "title": "Everlast", "quote": "Wir"}]
+            if "Mitbewerber" in query
+            else [{"url": "https://peer.example", "title": "Capgemini", "quote": "KI-Beratung"}]
+        ),
+    )
+
+    async def fake_retry(_question: str, first: str, note: str = "") -> str:
+        return "KI Beratung DACH Capgemini Accenture"
+
+    async def fake_write(_session, job_arg) -> None:
+        if job_arg.report_md == "":
+            job_arg.report_md = "Die vorliegenden Quellen enthalten keine konkreten Informationen zu direkten Mitbewerbern."
+        else:
+            job_arg.report_md = "Capgemini wird genannt. [1]"
+
+    monkeypatch.setattr(research, "rewrite_retry_web_query", fake_retry)
+    monkeypatch.setattr(research, "write_research_report", fake_write)
+    asyncio.run(research.run_fast_research(session, job))
+    assert queries[0] == "Everlast Consulting Mitbewerber"
+    assert "Capgemini" in queries[1]
+    assert job.status == "ready"
 
 
 def test_prepare_imported_sources_embeds_only(monkeypatch) -> None:

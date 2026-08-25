@@ -26,6 +26,7 @@ EVAL_TITLE = "Eval Gold"
 REFUSE_MARKERS = (
     "nicht in den quellen",
     "keine klare antwort",
+    "keine belastbare",
     "steht nicht",
     "nicht enthalten",
     "enthalten keine",

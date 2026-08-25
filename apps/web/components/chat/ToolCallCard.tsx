@@ -6,8 +6,11 @@ import { toolArgumentPreview, type ToolCallView } from "@/lib/chatLive";
 function formatResult(result: unknown): string {
   if (result == null) return "";
   if (typeof result === "string") return result;
-  if (typeof result === "object" && result && "query" in result) {
-    return String((result as { query?: unknown }).query || JSON.stringify(result, null, 2));
+  if (typeof result === "object" && result) {
+    const rec = result as { query?: unknown; status?: unknown; job_id?: unknown };
+    if (rec.query) {
+      return [String(rec.query), rec.status ? String(rec.status) : ""].filter(Boolean).join(" · ");
+    }
   }
   return JSON.stringify(result, null, 2);
 }

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from app.services.chat_agent import (
     NO_ANSWER,
+    RESUME_SYSTEM,
     SYSTEM,
     TOOL_SKIPPED,
     _stream_pass,
@@ -45,6 +46,8 @@ def test_system_uses_exact_no_answer() -> None:
     assert "research.fast" in skills.CHAT_TOOLS
     assert "research_fast" in SYSTEM
     assert "Warte nicht auf Wörter wie recherchiere" in SYSTEM
+    assert "starre Leerformel" in RESUME_SYSTEM
+    assert "antworte genau mit" not in RESUME_SYSTEM
     assert "Ollama" in SYSTEM
     assert "BM25" in SYSTEM
     assert "Hybrid-Search" in SYSTEM

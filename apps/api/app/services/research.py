@@ -25,6 +25,7 @@ from app.services.ingest import (
     unwrap_markdown_fence,
 )
 from app.services.net import host_open
+from app.services.search_query import rewrite_retry_web_query
 from app.services.tracing import pack_prompt, record_generation, start_trace
 
 _SKIP = {".pdf", ".jpg", ".png", ".gif", ".zip", ".css", ".js"}
@@ -124,6 +125,35 @@ def browse_pages(start_urls: list[str], max_pages: int = 8, max_depth: int = 2) 
     return pages
 
 
+def unique_search_results(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for item in items:
+        url = str(item.get("url") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(item)
+    return out
+
+
+def report_misses_question(report_md: str) -> bool:
+    text = (report_md or "").casefold()
+    if not text.strip():
+        return True
+    marks = (
+        "keine konkreten",
+        "keine klare",
+        "nicht möglich",
+        "keine direkten mitbewerber",
+        "keine informationen zu",
+        "wettbewerbsanalyse ist auf basis",
+        "nicht beantworten",
+        "keine belastbare",
+    )
+    return any(mark in text for mark in marks)
+
+
 async def _add_candidates(
     session: AsyncSession, job: ResearchJob, items: list[dict[str, str]], cited: set[str]
 ) -> None:
@@ -206,6 +236,7 @@ async def write_research_report(session: AsyncSession, job: ResearchJob) -> None
                 "Thema ist die Suchanfrage. "
                 "Nutze nur die gelieferten Treffer. Setze Zitate als [n]. "
                 "Erfinde keine Fakten, Zahlen, Namen, Jahre oder URLs. "
+                "Wenn die Treffer die Frage nicht tragen, sag das klar und nenne, was fehlt. "
                 "Schliesse mit der Zeile: Dieser Bericht ist KI-generiert."
             ),
         },
@@ -250,17 +281,38 @@ async def run_fast_research(session: AsyncSession, job: ResearchJob) -> None:
         await session.commit()
         return
     job.status = "running"
-    job.progress = "Suche läuft"
+    job.progress = f"Suche: {job.query}"
     await session.commit()
-    results = searx_search(job.query)
+    results = unique_search_results(searx_search(job.query))
+    if not results:
+        alt = await rewrite_retry_web_query(job.query, job.query, "keine Treffer")
+        if alt.casefold() != job.query.casefold():
+            job.progress = f"Neue Suche: {alt}"
+            await session.commit()
+            results = unique_search_results(searx_search(alt))
     await _add_candidates(session, job, results, {item["url"] for item in results})
-    job.status = "ready"
-    job.progress = f"{len(results)} Treffer"
     if results:
         job.report_md = ""
         await session.commit()
         await write_research_report(session, job)
+        if report_misses_question(job.report_md):
+            alt = await rewrite_retry_web_query(job.query, job.query, job.report_md)
+            if alt.casefold() != job.query.casefold():
+                job.progress = f"Neue Suche: {alt}"
+                await session.commit()
+                extra = unique_search_results(searx_search(alt))
+                known = {item["url"] for item in results}
+                extra = [item for item in extra if item["url"] not in known]
+                if extra:
+                    await _add_candidates(session, job, extra, {item["url"] for item in extra})
+                    results = unique_search_results(results + extra)
+                    await write_research_report(session, job)
+        job.status = "ready"
+        job.progress = f"{len(results)} Treffer"
+        await session.commit()
         return
+    job.status = "ready"
+    job.progress = "0 Treffer"
     job.report_md = fallback_report("fast", results)
     await session.commit()
 

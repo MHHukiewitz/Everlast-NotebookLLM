@@ -19,14 +19,18 @@ from app.services.search_query import rewrite_search_query, rewrite_web_query
 from app.services.skills import CHAT_TOOLS, REGISTRY, resolve_tool_name, run_skill, tool_schema
 from app.services.tracing import pack_prompt, record_generation, start_trace
 
-NO_ANSWER = "Die Quellen enthalten dazu keine klare Antwort."
+NO_ANSWER = (
+    "In den Treffern steht dazu keine belastbare Angabe. "
+    "Nenne nur, was die Suche wirklich gefunden hat. Die gefragte Tatsache fehlt."
+)
 NO_SOURCES = "Füge Quellen hinzu oder stelle eine Frage."
 RESEARCH_WAIT = "Ich suche im Web nach weiteren Fakten…"
 DECIDE_WEB = (
     "Die ausgewählten Quellen reichen für diese Frage nicht. "
     "Wenn Webfakten helfen, rufe research_fast auf. "
     "Schreibe in query eine kurze Suchmaschinen-Anfrage. "
-    f"Wenn eine Websuche nicht hilft, antworte genau mit: {NO_ANSWER}"
+    "Wenn schon eine Suche lief, nimm einen anderen Winkel. "
+    "Wenn eine Websuche nicht hilft, erkläre kurz, was fehlt und welcher Begriff genutzt wurde."
 )
 SEARX_DOWN = "SearXNG ist nicht erreichbar. Starte den SearXNG-Container."
 TOOL_SKIPPED = "Nicht ausgeführt"
@@ -41,8 +45,8 @@ Lege keine Notiz an, um die Frage zu beantworten.
 Für Fakten nutze zuerst die ausgewählten Quellen im Kontext.
 Wenn der Quellenkontext relevante Fakten zur Frage enthält, musst du antworten. Verbinde Fakten aus mehreren Quellen. Nutze dann nicht: {NO_ANSWER}
 Wenn der Quellenkontext die Frage nicht trägt und du Webfakten brauchst, rufe research_fast auf. Warte nicht auf Wörter wie recherchiere.
-Schreibe in query eine kurze Suchmaschinen-Anfrage mit Namen, Ort und Branche.
-Wenn weder Quellen noch eine Websuche helfen, antworte genau mit: {NO_ANSWER}
+Schreibe in query eine kurze Suchmaschinen-Anfrage mit Namen, Ort und Branche. Verwechsle keine gleichnamigen Marken.
+Wenn weder Quellen noch eine Websuche helfen, erkläre in normalen Sätzen, was fehlt und welcher Suchbegriff genutzt wurde. Erfinde keine Firmen.
 Übernimm Werkzeug- und Methodennamen aus dem Kontext wörtlich: Ollama, BM25, Hybrid-Search, Langfuse.
 Erfinde keine Fakten, Zahlen, Namen oder Daten.
 Hänge Zitate in der Form [n] an Sätze an, wenn du eine Faktantwort gibst. n ist die Nummer im Quellenkontext.
@@ -57,8 +61,9 @@ Stelle dich nicht vor. Beginne die Antwort nicht mit „Ich bin Everlast Noteboo
 Antworte auf Deutsch in normaler Sprache.
 Beantworte zuerst die Frage. Schreibe nur wenige Sätze.
 Nutze nur den Recherche-Scratch im Kontext.
-Wenn der Scratch die gefragte Tatsache nennt, musst du antworten. Nutze dann nicht: {NO_ANSWER}
-Wenn eine Tatsache fehlt, antworte genau mit: {NO_ANSWER}
+Wenn der Scratch die gefragte Tatsache nennt, musst du antworten.
+Wenn die gefragte Tatsache fehlt, erfinde nichts. Sage, welche Suche lief, was die Treffer hergeben und was fehlt.
+Biete in einem Satz einen anderen Suchwinkel. Schreibe keine starre Leerformel.
 Übernimm Werkzeug- und Methodennamen aus dem Kontext wörtlich: Ollama, BM25, Hybrid-Search, Langfuse.
 Erfinde keine Zahlen und keine Fakten.
 Hänge Zitate in der Form [n] an Sätze an, wenn du eine Faktantwort gibst. n ist die Nummer im Scratch.
@@ -288,11 +293,24 @@ def is_smalltalk(text: str) -> bool:
     return bool(_SMALLTALK.match(text.strip()))
 
 
+def looks_unanswered(text: str) -> bool:
+    visible = (text or "").strip()
+    if not visible or visible == NO_ANSWER:
+        return True
+    lower = visible.casefold()
+    marks = (
+        "keine klare antwort",
+        "keine belastbare",
+        "keine konkreten",
+        "gefragte tatsache fehlt",
+    )
+    return any(mark in lower for mark in marks)
+
+
 def should_offer_web_search(user_text: str, assistant_text: str) -> bool:
     if is_smalltalk(user_text):
         return False
-    visible = (assistant_text or "").strip()
-    return not visible or visible == NO_ANSWER
+    return looks_unanswered(assistant_text)
 
 
 def json_object_complete(text: str) -> bool:
@@ -965,7 +983,7 @@ async def run_chat(
     assistant_text, _leaks = extract_leaked_tools(assistant_text)
     if chunks and tools_enabled and not pending_job_id:
         visible = assistant_text.strip()
-        if not visible or visible == NO_ANSWER:
+        if looks_unanswered(visible):
             if search_is_weak(chunks, len(source_ids)):
                 chunks, search_query = await retrieve_chunks(
                     session, notebook, user_text, source_ids, force_wide=True
@@ -994,7 +1012,7 @@ async def run_chat(
         async for event in _stream_pass(
             session, notebook, decide_messages, _tools_for_prompt(), decide_executed
         ):
-            if event.get("event") == "token" and str(event.get("text") or "").strip() == NO_ANSWER:
+            if event.get("event") == "token" and looks_unanswered(str(event.get("text") or "")) and len(str(event.get("text") or "").strip()) >= 40:
                 record_step(reasoning, event)
                 continue
             if event.get("event") == "token":
@@ -1452,7 +1470,10 @@ async def run_chat_resume(
             raw_output += content
             yield {"event": "token", "text": content}
     if not assistant_text:
-        assistant_text = "Die Recherche enthält dazu keine klare Antwort."
+        assistant_text = (
+            f"Die Suche „{job.query}“ hat die gefragte Tatsache nicht belegt. "
+            "Ein anderer Suchwinkel kann weitere Treffer bringen."
+        )
         yield {"event": "token", "text": assistant_text}
     write = step_event("write", "Antwort schreiben", step_id=WRITE_STEP_ID)
     record_step(reasoning, write)
