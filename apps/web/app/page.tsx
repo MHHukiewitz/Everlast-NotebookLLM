@@ -35,6 +35,7 @@ import {
   requestStudioNotifyPermission,
   studioNotifyWanted,
 } from "@/lib/studioNotify";
+import { pendingStudioStillOpen } from "@/lib/studioPending";
 import type {
   Artifact,
   AuthUser,
@@ -126,7 +127,7 @@ export default function Page() {
   const [modalities, setModalities] = useState<Modalities | null>(null);
   const [studioSkill, setStudioSkill] = useState<Skill | null>(null);
   const [pendingStudio, setPendingStudio] = useState<
-    { id: string; skillId: string; title: string; type: string }[]
+    { id: string; skillId: string; title: string; type: string; startedAt: number }[]
   >([]);
   const studioListRef = useRef<HTMLDivElement>(null);
   const studioSubmitLock = useRef(false);
@@ -277,6 +278,13 @@ export default function Page() {
   useEffect(() => {
     artifactStatusRef.current = null;
   }, [notebook?.id]);
+
+  useEffect(() => {
+    setPendingStudio((list) => {
+      const next = list.filter((item) => pendingStudioStillOpen(item, artifacts));
+      return next.length === list.length ? list : next;
+    });
+  }, [artifacts]);
 
   useEffect(() => {
     if (artifactStatusRef.current === null) {
@@ -751,6 +759,7 @@ export default function Page() {
         skillId: skill.id,
         title: skill.title,
         type: skill.id.startsWith("studio.") ? skill.id.slice(7) : skill.id,
+        startedAt: Date.now(),
       },
       ...list,
     ]);
@@ -760,6 +769,7 @@ export default function Page() {
       setStudioError(err.message);
       return null;
     });
+    setPendingStudio((list) => list.filter((item) => item.id !== pendingId));
     if (result) {
       const art = await refresh(notebookId);
       await syncNotebook(notebookId);
@@ -778,7 +788,6 @@ export default function Page() {
         tag: `studio-${pendingId}`,
       });
     }
-    setPendingStudio((list) => list.filter((item) => item.id !== pendingId));
   }
 
   if (!notebook) {

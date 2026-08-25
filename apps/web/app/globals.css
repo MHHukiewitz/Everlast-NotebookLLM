@@ -159,6 +159,23 @@ body {
   @apply bg-transparent p-0;
 }
 
+.md-table-wrap {
+  @apply mb-3 overflow-x-auto;
+}
+
+.md-body table {
+  @apply w-full border-collapse text-sm;
+}
+
+.md-body th,
+.md-body td {
+  @apply border border-line px-2 py-1.5 align-top;
+}
+
+.md-body th {
+  @apply bg-mist text-left font-medium text-neutral-800;
+}
+
 .tool-call summary {
   list-style: disclosure-closed;
 }

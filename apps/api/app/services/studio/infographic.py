@@ -151,6 +151,12 @@ def normalize_charts(raw: Any) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             continue
         kind = str(entry.get("type") or "").lower()
+        if kind in {"column", "säulen", "saulen"}:
+            kind = "bar"
+        if kind in {"balken"}:
+            kind = "hbar"
+        if kind in {"kreis"}:
+            kind = "pie"
         if kind not in {"bar", "hbar", "pie"}:
             continue
         points: list[dict[str, Any]] = []

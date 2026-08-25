@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { MarkdownBody } from "@/components/MarkdownBody";
 import { SiteFooter } from "@/components/SiteFooter";
 import { ApiError, api, type EvalItem, type EvalRun, type GenerationLog } from "@/lib/api";
 import { reasoningLabel } from "@/lib/chatLive";
@@ -236,7 +237,9 @@ export default function EvalPage() {
                 </div>
                 <h2 className="mt-1 font-medium">{item.question}</h2>
                 <p className="mt-1 text-sm text-neutral-600">Soll: {item.expected_answer}</p>
-                <p className="mt-2 whitespace-pre-wrap text-sm">{item.answer}</p>
+                <div className="mt-2">
+                  <MarkdownBody>{item.answer}</MarkdownBody>
+                </div>
                 <div className="mt-3 grid gap-2 text-xs md:grid-cols-5">
                   <label>
                     Treue 1–5

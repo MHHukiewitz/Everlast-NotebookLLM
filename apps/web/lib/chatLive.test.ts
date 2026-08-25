@@ -118,6 +118,10 @@ assert.deepEqual(
   [2, 4],
 );
 assert.equal(protectCiteMarks("Satz [2][4] und [5]."), "Satz ⟦2⟧⟦4⟧ und ⟦5⟧.");
+assert.equal(
+  protectCiteMarks("| A | B [1] |\n| --- | --- |\n| x | y |"),
+  "| A | B ⟦1⟧ |\n| --- | --- |\n| x | y |",
+);
 const bound = bindChatCitations("Mike [2][4] und [5].", [{ n: 2, quote: "chunk two" }], [
   { id: "s1", title: "Eins" },
   { id: "s2", title: "Zwei" },

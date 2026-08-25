@@ -3,32 +3,18 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { t } from "@/lib/i18n";
 import { PANE_WIDTHS_COOKIE, readCookie, writeCookie } from "@/lib/notebook";
+import {
+  DEFAULT_SOURCES,
+  DEFAULT_STUDIO,
+  MIN_SOURCES,
+  MIN_STUDIO,
+  fitPaneWidths,
+  formatPaneWidths,
+  parsePaneWidths,
+  samePaneWidths,
+} from "@/lib/paneWidths";
 
-const MIN_SOURCES = 240;
-const MAX_SOURCES = 520;
-const MIN_STUDIO = 240;
-const MAX_STUDIO = 480;
-const MIN_CHAT = 360;
 const HANDLE = 8;
-const DEFAULT_SOURCES = MAX_SOURCES;
-const DEFAULT_STUDIO = MAX_STUDIO;
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function readWidths(): { sources: number; studio: number } {
-  const raw = readCookie(PANE_WIDTHS_COOKIE);
-  if (!raw) return { sources: DEFAULT_SOURCES, studio: DEFAULT_STUDIO };
-  const parts = raw.split(",");
-  if (parts.length !== 2) return { sources: DEFAULT_SOURCES, studio: DEFAULT_STUDIO };
-  const sources = Number(parts[0]);
-  const studio = Number(parts[1]);
-  if (!Number.isFinite(sources) || !Number.isFinite(studio)) {
-    return { sources: DEFAULT_SOURCES, studio: DEFAULT_STUDIO };
-  }
-  return { sources, studio };
-}
 
 export function ResizableStages({
   sources,
@@ -40,50 +26,34 @@ export function ResizableStages({
   studio: ReactNode;
 }) {
   const boxRef = useRef<HTMLElement>(null);
-  const [wide, setWide] = useState(false);
-  const [ready, setReady] = useState(false);
+  const desiredRef = useRef({ sources: DEFAULT_SOURCES, studio: DEFAULT_STUDIO });
   const [widths, setWidths] = useState({ sources: DEFAULT_SOURCES, studio: DEFAULT_STUDIO });
 
-  const apply = useCallback((nextSources: number, nextStudio: number) => {
+  const show = useCallback((nextSources: number, nextStudio: number) => {
     const box = boxRef.current;
-    const inner = box ? box.clientWidth - HANDLE * 2 : 1600;
-    const sourcesMax = clamp(inner - nextStudio - MIN_CHAT, MIN_SOURCES, MAX_SOURCES);
-    const studioMax = clamp(inner - nextSources - MIN_CHAT, MIN_STUDIO, MAX_STUDIO);
-    setWidths({
-      sources: clamp(nextSources, MIN_SOURCES, sourcesMax),
-      studio: clamp(nextStudio, MIN_STUDIO, studioMax),
-    });
+    const inner = box && box.clientWidth > HANDLE * 2 ? box.clientWidth - HANDLE * 2 : 0;
+    const next =
+      inner > 0 ? fitPaneWidths(inner, nextSources, nextStudio) : { sources: nextSources, studio: nextStudio };
+    setWidths((prev) => (samePaneWidths(prev, next) ? prev : next));
   }, []);
 
   useEffect(() => {
-    const media = window.matchMedia("(min-width: 1024px)");
-    const sync = () => setWide(media.matches);
-    sync();
-    media.addEventListener("change", sync);
-    const saved = readWidths();
-    setWidths(saved);
-    setReady(true);
-    return () => media.removeEventListener("change", sync);
-  }, []);
-
-  useEffect(() => {
-    if (!ready) return;
-    apply(widths.sources, widths.studio);
-  }, [apply, ready]);
-
-  useEffect(() => {
-    if (!ready) return;
-    writeCookie(PANE_WIDTHS_COOKIE, `${widths.sources},${widths.studio}`);
-  }, [ready, widths]);
-
-  useEffect(() => {
-    if (!ready) return;
-    function onResize() {
-      apply(widths.sources, widths.studio);
+    const raw = readCookie(PANE_WIDTHS_COOKIE);
+    const saved = parsePaneWidths(raw);
+    desiredRef.current = saved;
+    if (raw === `${MIN_SOURCES},${MIN_STUDIO}`) {
+      writeCookie(PANE_WIDTHS_COOKIE, formatPaneWidths(saved));
     }
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [apply, ready, widths]);
+    show(saved.sources, saved.studio);
+    const box = boxRef.current;
+    if (!box) return;
+    const observer = new ResizeObserver(() => {
+      const desired = desiredRef.current;
+      show(desired.sources, desired.studio);
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [show]);
 
   function startDrag(side: "sources" | "studio", event: React.PointerEvent<HTMLButtonElement>) {
     event.preventDefault();
@@ -94,14 +64,17 @@ export function ResizableStages({
 
     function onMove(move: PointerEvent) {
       const delta = move.clientX - originX;
-      if (side === "sources") {
-        apply(origin.sources + delta, origin.studio);
-        return;
-      }
-      apply(origin.sources, origin.studio - delta);
+      const nextSources = side === "sources" ? origin.sources + delta : origin.sources;
+      const nextStudio = side === "sources" ? origin.studio : origin.studio - delta;
+      const box = boxRef.current;
+      const inner = box && box.clientWidth > HANDLE * 2 ? box.clientWidth - HANDLE * 2 : 1600;
+      const next = fitPaneWidths(inner, nextSources, nextStudio);
+      desiredRef.current = next;
+      setWidths(next);
     }
 
     function onUp() {
+      writeCookie(PANE_WIDTHS_COOKIE, formatPaneWidths(desiredRef.current));
       target.releasePointerCapture(event.pointerId);
       target.removeEventListener("pointermove", onMove);
       target.removeEventListener("pointerup", onUp);
@@ -112,18 +85,21 @@ export function ResizableStages({
   }
 
   function nudge(side: "sources" | "studio", step: number) {
-    if (side === "sources") {
-      apply(widths.sources + step, widths.studio);
-      return;
-    }
-    apply(widths.sources, widths.studio + step);
+    const nextSources = side === "sources" ? widths.sources + step : widths.sources;
+    const nextStudio = side === "sources" ? widths.studio : widths.studio + step;
+    const box = boxRef.current;
+    const inner = box && box.clientWidth > HANDLE * 2 ? box.clientWidth - HANDLE * 2 : 1600;
+    const next = fitPaneWidths(inner, nextSources, nextStudio);
+    desiredRef.current = next;
+    writeCookie(PANE_WIDTHS_COOKIE, formatPaneWidths(next));
+    setWidths(next);
   }
 
   return (
     <main ref={boxRef} className="flex min-h-0 flex-1 flex-col lg:flex-row">
       <div
-        className="min-h-0 min-w-0 flex-1 lg:flex-none"
-        style={wide ? { width: widths.sources } : undefined}
+        className="min-h-0 min-w-0 flex-1 lg:w-[var(--pane-w)] lg:flex-none"
+        style={{ ["--pane-w" as string]: `${widths.sources}px` }}
       >
         {sources}
       </div>
@@ -145,8 +121,8 @@ export function ResizableStages({
         }}
       />
       <div
-        className="min-h-0 min-w-0 flex-1 lg:flex-none"
-        style={wide ? { width: widths.studio } : undefined}
+        className="min-h-0 min-w-0 flex-1 lg:w-[var(--pane-w)] lg:flex-none"
+        style={{ ["--pane-w" as string]: `${widths.studio}px` }}
       >
         {studio}
       </div>

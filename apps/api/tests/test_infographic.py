@@ -74,6 +74,14 @@ def test_normalize_charts_needs_two_points() -> None:
     assert charts[0]["type"] == "pie"
 
 
+def test_normalize_charts_maps_german_bar_type() -> None:
+    charts = normalize_charts(
+        [{"type": "säulen", "title": "Preis", "points": [{"label": "A", "value": 1900}, {"label": "B", "value": 4990}]}]
+    )
+    assert charts[0]["type"] == "bar"
+    assert charts[0]["points"][0]["value"] == 1900
+
+
 def test_normalize_charts_skips_unknown_type() -> None:
     assert (
         normalize_charts(

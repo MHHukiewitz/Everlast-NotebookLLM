@@ -29,21 +29,29 @@ function wrapWords(text: string, width: number): string[] {
   return lines.slice(0, 6);
 }
 
+function chartKind(type: string | undefined): "bar" | "hbar" | "pie" {
+  const kind = (type || "").toLowerCase();
+  if (kind === "pie" || kind === "kreis") return "pie";
+  if (kind === "bar" || kind === "column" || kind === "säulen") return "bar";
+  return "hbar";
+}
+
 function ChartView({
   chart,
   citations,
   onCite,
 }: { chart: InfographicChart } & StudioCiteProps) {
-  const points = (chart.points || []).filter((point) => Number.isFinite(point.value));
+  const points = (chart.points || []).filter((point) => Number.isFinite(Number(point.value)));
   if (points.length < 2) return null;
-  const peak = Math.max(...points.map((point) => point.value), 1);
+  const peak = Math.max(...points.map((point) => Number(point.value)), 1);
   const unit = chart.unit ? ` ${chart.unit}` : "";
+  const kind = chartKind(chart.type);
   return (
     <figure className="rounded-xl border border-line bg-white p-3">
       <figcaption className="text-xs font-medium text-neutral-800">{chart.title}</figcaption>
-      {chart.type === "pie" ? <PieChart points={points} unit={unit} /> : null}
-      {chart.type === "bar" ? <BarChart points={points} peak={peak} /> : null}
-      {chart.type !== "pie" && chart.type !== "bar" ? <HBarChart points={points} peak={peak} unit={unit} /> : null}
+      {kind === "pie" ? <PieChart points={points} unit={unit} /> : null}
+      {kind === "bar" ? <BarChart points={points} peak={peak} /> : null}
+      {kind === "hbar" ? <HBarChart points={points} peak={peak} unit={unit} /> : null}
       {chart.cite && (
         <p className="mt-2 text-[11px] text-neutral-400">
           <CiteText text={chart.cite} citations={citations} onCite={onCite} />
@@ -55,17 +63,20 @@ function ChartView({
 
 function BarChart({ points, peak }: { points: InfographicPoint[]; peak: number }) {
   return (
-    <div className="mt-3 flex h-32 items-end gap-2">
-      {points.map((point, index) => (
-        <div key={point.label} className="flex min-w-0 flex-1 flex-col items-center">
-          <span className="mb-1 text-[10px] text-neutral-500">{point.value}</span>
-          <div
-            className="w-full rounded-t"
-            style={{ height: `${Math.max(8, (point.value / peak) * 100)}%`, background: COLORS[index % COLORS.length] }}
-          />
-          <span className="mt-1 w-full truncate text-center text-[10px] text-neutral-600">{point.label}</span>
-        </div>
-      ))}
+    <div className="mt-3 flex h-40 items-stretch gap-2">
+      {points.map((point, index) => {
+        const value = Number(point.value);
+        const height = `${Math.max(8, (value / peak) * 100)}%`;
+        return (
+          <div key={point.label} className="flex min-w-0 flex-1 flex-col items-center">
+            <span className="mb-1 text-[10px] text-neutral-500">{value}</span>
+            <div className="flex w-full min-h-0 flex-1 items-end">
+              <div className="w-full rounded-t" style={{ height, background: COLORS[index % COLORS.length] }} />
+            </div>
+            <span className="mt-1 w-full truncate text-center text-[10px] text-neutral-600">{point.label}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -78,14 +89,14 @@ function HBarChart({ points, peak, unit }: { points: InfographicPoint[]; peak: n
           <div className="mb-0.5 flex justify-between gap-2 text-neutral-700">
             <span>{point.label}</span>
             <span>
-              {point.value}
+              {Number(point.value)}
               {unit}
             </span>
           </div>
           <div className="h-2 overflow-hidden rounded bg-mist">
             <div
               className="h-2 rounded"
-              style={{ width: `${Math.max(6, (point.value / peak) * 100)}%`, background: COLORS[index % COLORS.length] }}
+              style={{ width: `${Math.max(6, (Number(point.value) / peak) * 100)}%`, background: COLORS[index % COLORS.length] }}
             />
           </div>
         </li>
@@ -95,10 +106,10 @@ function HBarChart({ points, peak, unit }: { points: InfographicPoint[]; peak: n
 }
 
 function PieChart({ points, unit }: { points: InfographicPoint[]; unit: string }) {
-  const total = points.reduce((sum, point) => sum + point.value, 0) || 1;
+  const total = points.reduce((sum, point) => sum + Number(point.value), 0) || 1;
   let angle = -90;
   const slices = points.map((point, index) => {
-    const sweep = (point.value / total) * 360;
+    const sweep = (Number(point.value) / total) * 360;
     const start = angle;
     angle += sweep;
     return { point, color: COLORS[index % COLORS.length], start, sweep };
@@ -115,7 +126,7 @@ function PieChart({ points, unit }: { points: InfographicPoint[]; unit: string }
           <li key={slice.point.label} className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-sm" style={{ background: slice.color }} />
             <span>
-              {slice.point.label} · {slice.point.value}
+              {slice.point.label} · {Number(slice.point.value)}
               {unit}
             </span>
           </li>
